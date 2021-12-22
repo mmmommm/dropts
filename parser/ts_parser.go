@@ -6,6 +6,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mmmommm/dropts/compat"
 	"github.com/mmmommm/dropts/ast"
@@ -1560,4 +1561,17 @@ func (p *parser) generateClosureForTypeScriptEnum(
 	p.emittedNamespaceVars[nameRef] = true
 
 	return stmts
+}
+
+func (p *parser) wrapInlinedEnum(value ast.Expr, comment string) ast.Expr {
+	if p.shouldFoldNumericConstants || p.options.mangleSyntax || strings.Contains(comment, "*/") {
+		// Don't wrap with a comment
+		return value
+	}
+
+	// Wrap with a comment
+	return ast.Expr{Loc: value.Loc, Data: &ast.EInlinedEnum{
+		Value:   value,
+		Comment: comment,
+	}}
 }

@@ -11,6 +11,38 @@ import (
 	"github.com/mmmommm/dropts/logger"
 )
 
+type DefineArgs struct {
+	Loc             logger.Loc
+	FindSymbol      func(logger.Loc, string) ast.Ref
+	SymbolForDefine func(int) ast.Ref
+}
+
+type DefineFunc func(DefineArgs) ast.E
+
+type DefineData struct {
+	DefineFunc DefineFunc
+
+	// True if accessing this value is known to not have any side effects. For
+	// example, a bare reference to "Object.create" can be removed because it
+	// does not have any observable side effects.
+	CanBeRemovedIfUnused bool
+
+	// True if a call to this value is known to not have any side effects. For
+	// example, a bare call to "Object()" can be removed because it does not
+	// have any observable side effects.
+	CallCanBeUnwrappedIfUnused bool
+}
+
+type DotDefine struct {
+	Parts []string
+	Data  DefineData
+}
+
+type ProcessedDefines struct {
+	IdentifierDefines map[string]DefineData
+	DotDefines        map[string][]DotDefine
+}
+
 type JSXOptions struct {
 	Factory  JSXExpr
 	Fragment JSXExpr
@@ -228,7 +260,7 @@ type Options struct {
 
 	TargetFromAPI          TargetFromAPI
 	UnsupportedJSFeatures  compat.JSFeature
-	UnsupportedCSSFeatures compat.CSSFeature
+	// UnsupportedCSSFeatures compat.CSSFeature
 	TSTarget               *TSTarget
 
 	// This is the original information that was used to generate the

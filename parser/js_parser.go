@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"sync"
 	"fmt"
 	"math"
 	"reflect"
@@ -15,9 +16,29 @@ import (
 	"github.com/mmmommm/dropts/helpers"
 	"github.com/mmmommm/dropts/lexer"
 	"github.com/mmmommm/dropts/logger"
-	"github.com/mmmommm/dropts/renamer"
-	"github.com/mmmommm/dropts/runtime"
+	// "github.com/mmmommm/dropts/renamer"
+	// "github.com/mmmommm/dropts/runtime"
 )
+
+const SourceIndex = uint32(0)
+
+type SourceIndexCache struct {
+	mutex           sync.Mutex
+	entries         map[sourceIndexKey]uint32
+	nextSourceIndex uint32
+}
+
+type SourceIndexKind uint8
+
+const (
+	SourceIndexNormal SourceIndexKind = iota
+	SourceIndexJSStubForCSS
+)
+
+type sourceIndexKey struct {
+	path logger.Path
+	kind SourceIndexKind
+}
 
 // This parser does two passes:
 //
@@ -1751,7 +1772,7 @@ func (p *parser) callRuntime(loc logger.Loc, name string, args []ast.Expr) ast.E
 }
 
 func (p *parser) valueToSubstituteForRequire(loc logger.Loc) ast.Expr {
-	if p.source.Index != runtime.SourceIndex &&
+	if p.source.Index != SourceIndex &&
 		config.ShouldCallRuntimeRequire(p.options.mode, p.options.outputFormat) {
 		return p.importFromRuntime(loc, "__require")
 	}
@@ -14909,7 +14930,7 @@ func (p *parser) declareCommonJSSymbol(kind ast.SymbolKind, name string) ast.Ref
 // better gzip compression. Even though it's a very small win, we still do it
 // because it's simple to do and very cheap to compute.
 func (p *parser) computeCharacterFrequency() *ast.CharFreq {
-	if !p.options.minifyIdentifiers || p.source.Index == runtime.SourceIndex {
+	if !p.options.minifyIdentifiers || p.source.Index == SourceIndex {
 		return nil
 	}
 
@@ -15002,7 +15023,7 @@ func (p *parser) toAST(parts []ast.Part, hashbang string, directive string) ast.
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
-		parts = p.generateImportStmt("<runtime>", keys, runtime.SourceIndex, parts, p.runtimeImports)
+		parts = p.generateImportStmt("<runtime>", keys, SourceIndex, parts, p.runtimeImports)
 	}
 
 	// Handle import paths after the whole file has been visited because we need
@@ -15134,9 +15155,9 @@ func (p *parser) toAST(parts []ast.Part, hashbang string, directive string) ast.
 	// now in the parser because we want it to be done in parallel per file and
 	// we're already executing code in a dedicated goroutine for this file.
 	var nestedScopeSlotCounts ast.SlotCounts
-	if p.options.minifyIdentifiers {
-		nestedScopeSlotCounts = renamer.AssignNestedScopeSlots(p.moduleScope, p.symbols)
-	}
+	// if p.options.minifyIdentifiers {
+	// 	nestedScopeSlotCounts = renamer.AssignNestedScopeSlots(p.moduleScope, p.symbols)
+	// }
 
 	exportsKind := ast.ExportsNone
 	usesExportsRef := p.symbols[p.exportsRef.InnerIndex].UseCountEstimate > 0
