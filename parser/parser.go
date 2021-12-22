@@ -7,59 +7,12 @@ import (
 	// "sort"
 
 	// "github.com/mmmommm/dropts/lexer"
+	"github.com/mmmommm/dropts/graph"
+	"github.com/mmmommm/dropts/helpers"
 	"github.com/mmmommm/dropts/ast"
 	"github.com/mmmommm/dropts/logger"
 	"github.com/mmmommm/dropts/config"
 )
-
-type Source struct {
-	Index uint32
-
-	// This is used as a unique key to identify this source file. It should never
-	// be shown to the user (e.g. never print this to the terminal).
-	//
-	// If it's marked as an absolute path, it's a platform-dependent path that
-	// includes environment-specific things such as Windows backslash path
-	// separators and potentially the user's home directory. Only use this for
-	// passing to syscalls for reading and writing to the file system. Do not
-	// include this in any output data.
-	//
-	// If it's marked as not an absolute path, it's an opaque string that is used
-	// to refer to an automatically-generated module.
-	KeyPath Path
-
-	// This is used for error messages and the metadata JSON file.
-	//
-	// This is a mostly platform-independent path. It's relative to the current
-	// working directory and always uses standard path separators. Use this for
-	// referencing a file in all output data. These paths still use the original
-	// case of the path so they may still work differently on file systems that
-	// are case-insensitive vs. case-sensitive.
-	PrettyPath string
-
-	// An identifier that is mixed in to automatically-generated symbol names to
-	// improve readability. For example, if the identifier is "util" then the
-	// symbol for an "export default" statement will be called "util_default".
-	IdentifierName string
-
-	Contents string
-}
-
-type Path struct {
-	Text      string
-	Namespace string
-
-	// This feature was added to support ancient CSS libraries that append things
-	// like "?#iefix" and "#icons" to some of their import paths as a hack for IE6.
-	// The intent is for these suffix parts to be ignored but passed through to
-	// the output. This is supported by other bundlers, so we also support this.
-	IgnoredSuffix string
-
-	Flags PathFlags
-}
-
-type PathFlags uint8
-
 
 type scannerFile struct {
 	inputFile  graph.InputFile
@@ -82,10 +35,10 @@ type parseArgs struct {
 	log             logger.Log
 	// res             resolver.Resolver
 	// caches          *cache.CacheSet
-	keyPath         Path
+	keyPath         logger.Path
 	prettyPath      string
 	sourceIndex     uint32
-	importSource    *Source
+	importSource    *logger.Source
 	// sideEffects     graph.SideEffects
 	// importPathRange logger.Range
 	pluginData      interface{}
@@ -105,7 +58,7 @@ type parseResult struct {
 
 
 func parseFile(args parseArgs) {
-	source := Source{
+	source := logger.Source{
 		Index:          args.sourceIndex,
 		KeyPath:        args.keyPath,
 		PrettyPath:     args.prettyPath,
@@ -113,7 +66,7 @@ func parseFile(args parseArgs) {
 	}
 
 	var loader config.Loader
-	var absResolveDir string
+	// var absResolveDir string
 	// var pluginName string
 	var pluginData interface{}
 
@@ -124,33 +77,33 @@ func parseFile(args parseArgs) {
 		if loader == config.LoaderNone {
 			loader = config.LoaderJS
 		}
-		absResolveDir = args.options.Stdin.AbsResolveDir
+		// absResolveDir = args.options.Stdin.AbsResolveDir
 	} else {
-		result, ok := runOnLoadPlugins(
-			args.options.Plugins,
-			// args.res,
-			args.fs,
-			// &args.caches.FSCache,
-			args.log,
-			&source,
-			args.importSource,
-			// args.importPathRange,
-			args.pluginData,
-			args.options.WatchMode,
-		)
-		if !ok {
-			// if args.inject != nil {
-			// 	args.inject <- config.InjectedFile{
-			// 		Source: source,
-			// 	}
-			// }
-			args.results <- parseResult{}
-			return
-		}
-		loader = result.loader
-		absResolveDir = result.absResolveDir
-		// pluginName = result.pluginName
-		pluginData = result.pluginData
+		// result, ok := runOnLoadPlugins(
+		// 	args.options.Plugins,
+		// 	// args.res,
+		// 	args.fs,
+		// 	// &args.caches.FSCache,
+		// 	args.log,
+		// 	&source,
+		// 	args.importSource,
+		// 	// args.importPathRange,
+		// 	args.pluginData,
+		// 	args.options.WatchMode,
+		// )
+		// if !ok {
+		// 	// if args.inject != nil {
+		// 	// 	args.inject <- config.InjectedFile{
+		// 	// 		Source: source,
+		// 	// 	}
+		// 	// }
+		// 	args.results <- parseResult{}
+		// 	return
+		// }
+		// loader = result.loader
+		// // absResolveDir = result.absResolveDir
+		// // pluginName = result.pluginName
+		// pluginData = result.pluginData
 	}
 
 	// _, base, ext := logger.PlatformIndependentPathDirBaseExt(source.KeyPath.Text)
@@ -484,14 +437,14 @@ func parseFile(args parseArgs) {
 	}
 
 	// Attempt to parse the source map if present
-	if loader.CanHaveSourceMap() && args.options.SourceMap != config.SourceMapNone {
-		// var sourceMapComment logger.Span
-		switch repr := result.file.inputFile.Repr.(type) {
-		case *graph.JSRepr:
-			sourceMapComment = repr.AST.SourceMapComment
-		case *graph.CSSRepr:
-			sourceMapComment = repr.AST.SourceMapComment
-		}
+	// if loader.CanHaveSourceMap() && args.options.SourceMap != config.SourceMapNone {
+	// 	var sourceMapComment logger.Span
+	// 	switch repr := result.file.inputFile.Repr.(type) {
+	// 	case *graph.JSRepr:
+	// 		sourceMapComment = repr.AST.SourceMapComment
+		// case *graph.CSSRepr:
+		// 	sourceMapComment = repr.AST.SourceMapComment
+		//}
 		// if sourceMapComment.Text != "" {
 		// 	if path, contents := extractSourceMapFromComment(args.log, args.fs, &args.caches.FSCache,
 		// 		args.res, &source, sourceMapComment, absResolveDir); contents != nil {
@@ -502,7 +455,7 @@ func parseFile(args parseArgs) {
 		// 		})
 		// 	}
 		// }
-	}
+	//}
 
 	args.results <- result
 }

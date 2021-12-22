@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"sync"
 	"fmt"
 	"math"
 	"reflect"
@@ -19,26 +18,6 @@ import (
 	// "github.com/mmmommm/dropts/renamer"
 	// "github.com/mmmommm/dropts/runtime"
 )
-
-const SourceIndex = uint32(0)
-
-type SourceIndexCache struct {
-	mutex           sync.Mutex
-	entries         map[sourceIndexKey]uint32
-	nextSourceIndex uint32
-}
-
-type SourceIndexKind uint8
-
-const (
-	SourceIndexNormal SourceIndexKind = iota
-	SourceIndexJSStubForCSS
-)
-
-type sourceIndexKey struct {
-	path logger.Path
-	kind SourceIndexKind
-}
 
 // This parser does two passes:
 //
@@ -1772,7 +1751,7 @@ func (p *parser) callRuntime(loc logger.Loc, name string, args []ast.Expr) ast.E
 }
 
 func (p *parser) valueToSubstituteForRequire(loc logger.Loc) ast.Expr {
-	if p.source.Index != SourceIndex &&
+	if p.source.Index != helpers.SourceIndex &&
 		config.ShouldCallRuntimeRequire(p.options.mode, p.options.outputFormat) {
 		return p.importFromRuntime(loc, "__require")
 	}
@@ -14470,10 +14449,10 @@ func simplifyUnusedStringAdditionChain(expr ast.Expr) (ast.Expr, bool) {
 }
 
 func newParser(log logger.Log, source logger.Source, lexer lexer.Lexer, options *Options) *parser {
-	if options.defines == nil {
-		defaultDefines := config.ProcessDefines(nil)
-		options.defines = &defaultDefines
-	}
+	// if options.defines == nil {
+	// 	defaultDefines := config.ProcessDefines(nil)
+	// 	options.defines = &defaultDefines
+	// }
 
 	p := &parser{
 		log:               log,
@@ -14505,7 +14484,7 @@ func newParser(log logger.Log, source logger.Source, lexer lexer.Lexer, options 
 		namedImports:            make(map[ast.Ref]ast.NamedImport),
 		namedExports:            make(map[string]ast.NamedExport),
 
-		suppressWarningsAboutWeirdCode: helpers.IsInsideNodeModules(source.KeyPath.Text),
+		// suppressWarningsAboutWeirdCode: helpers.IsInsideNodeModules(source.KeyPath.Text),
 	}
 
 	p.findSymbolHelper = func(loc logger.Loc, name string) ast.Ref {
@@ -14930,7 +14909,7 @@ func (p *parser) declareCommonJSSymbol(kind ast.SymbolKind, name string) ast.Ref
 // better gzip compression. Even though it's a very small win, we still do it
 // because it's simple to do and very cheap to compute.
 func (p *parser) computeCharacterFrequency() *ast.CharFreq {
-	if !p.options.minifyIdentifiers || p.source.Index == SourceIndex {
+	if !p.options.minifyIdentifiers || p.source.Index == helpers.SourceIndex {
 		return nil
 	}
 
@@ -15023,7 +15002,7 @@ func (p *parser) toAST(parts []ast.Part, hashbang string, directive string) ast.
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
-		parts = p.generateImportStmt("<runtime>", keys, SourceIndex, parts, p.runtimeImports)
+		parts = p.generateImportStmt("<runtime>", keys, helpers.SourceIndex, parts, p.runtimeImports)
 	}
 
 	// Handle import paths after the whole file has been visited because we need
