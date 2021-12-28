@@ -14,7 +14,7 @@ import (
 	"github.com/mmmommm/dropts/config"
 )
 
-type scannerFile struct {
+type parserFile struct {
 	inputFile  graph.InputFile
 	pluginData interface{}
 
@@ -49,13 +49,51 @@ type parseArgs struct {
 	uniqueKeyPrefix string
 }
 
-type parseResult struct {
-	file           scannerFile
-	// resolveResults []*resolver.ResolveResult
-	tlaCheck       tlaCheck
+// parseResultはbyteで返す
+type ParseResult struct {
+	ast ast.AST
 	ok             bool
 }
 
+type scanner struct {
+	log             logger.Log
+	fs              fs.FS
+	res             resolver.Resolver
+	caches          *cache.CacheSet
+	options         config.Options
+	timer           *helpers.Timer
+	uniqueKeyPrefix string
+
+	// This is not guarded by a mutex because it's only ever modified by a single
+	// thread. Note that not all results in the "results" array are necessarily
+	// valid. Make sure to check the "ok" flag before using them.
+	results       []parseResult
+	visited       map[logger.Path]uint32
+	resultChannel chan parseResult
+	remaining     int
+}
+
+// 並行処理で渡されたもの全てをparseする
+func (s *scanner) ParseAll() {
+	go parseFile(parseArgs{
+		fs:              s.fs,
+		log:             s.log,
+		res:             s.res,
+		caches:          s.caches,
+		keyPath:         path,
+		prettyPath:      prettyPath,
+		sourceIndex:     sourceIndex,
+		importSource:    importSource,
+		sideEffects:     sideEffects,
+		importPathRange: importPathRange,
+		pluginData:      pluginData,
+		options:         optionsClone,
+		results:         s.resultChannel,
+		inject:          inject,
+		skipResolve:     skipResolve,
+		uniqueKeyPrefix: s.uniqueKeyPrefix,
+	})
+}
 
 func parseFile(args parseArgs) {
 	source := logger.Source{
@@ -114,11 +152,11 @@ func parseFile(args parseArgs) {
 	// }
 
 	result := parseResult{
-		file: scannerFile{
+		file: parserFile{
 			inputFile: graph.InputFile{
 				Source:      source,
 				Loader:      loader,
-				// SideEffects: args.sideEffects,
+				SideEffects: args.sideEffects,
 			},
 			pluginData: pluginData,
 		},
@@ -459,3 +497,159 @@ func parseFile(args parseArgs) {
 
 	args.results <- result
 }
+
+// type Parse struct {
+// 	fs          fs.FS
+// 	res         resolver.Resolver
+// 	files       []scannerFile
+// 	entryPoints []graph.EntryPoint
+
+// 	// The unique key prefix is a random string that is unique to every bundling
+// 	// operation. It is used as a prefix for the unique keys assigned to every
+// 	// chunk during linking. These unique keys are used to identify each chunk
+// 	// before the final output paths have been computed.
+// 	uniqueKeyPrefix string
+// }
+
+// func ParseDrop(
+// 	log logger.Log,
+// 	fs fs.FS,
+// 	res resolver.Resolver,
+// 	caches *cache.CacheSet,
+// 	entryPoints []EntryPoint,
+// 	options config.Options,
+// 	timer *helpers.Timer,
+// ) Parse {
+// 	timer.Begin("Scan phase")
+// 	defer timer.End("Scan phase")
+
+// 	applyOptionDefaults(&options)
+
+// 	// Run "onStart" plugins in parallel
+// 	onStartWaitGroup := sync.WaitGroup{}
+// 	for _, plugin := range options.Plugins {
+// 		for _, onStart := range plugin.OnStart {
+// 			onStartWaitGroup.Add(1)
+// 			go func(plugin config.Plugin, onStart config.OnStart) {
+// 				result := onStart.Callback()
+// 				logPluginMessages(res, log, plugin.Name, result.Msgs, result.ThrownError, nil, logger.Range{})
+// 				onStartWaitGroup.Done()
+// 			}(plugin, onStart)
+// 		}
+// 	}
+
+// 	// Each bundling operation gets a separate unique key
+// 	uniqueKeyPrefix, err := generateUniqueKeyPrefix()
+// 	if err != nil {
+// 		log.Add(logger.Error, nil, logger.Range{}, fmt.Sprintf("Failed to read from randomness source: %s", err.Error()))
+// 	}
+
+// 	s := scanner{
+// 		log:             log,
+// 		fs:              fs,
+// 		res:             res,
+// 		caches:          caches,
+// 		options:         options,
+// 		timer:           timer,
+// 		results:         make([]parseResult, 0, caches.SourceIndexCache.LenHint()),
+// 		visited:         make(map[logger.Path]uint32),
+// 		resultChannel:   make(chan parseResult),
+// 		uniqueKeyPrefix: uniqueKeyPrefix,
+// 	}
+
+// 	// Always start by parsing the runtime file
+// 	s.results = append(s.results, parseResult{})
+// 	s.remaining++
+// 	go func() {
+// 		source, ast, ok := globalRuntimeCache.parseRuntime(&options)
+// 		s.resultChannel <- parseResult{
+// 			file: scannerFile{
+// 				inputFile: graph.InputFile{
+// 					Source: source,
+// 					Repr:   &graph.JSRepr{AST: ast},
+// 				},
+// 			},
+// 			ok: ok,
+// 		}
+// 	}()
+
+// 	s.preprocessInjectedFiles()
+// 	entryPointMeta := s.addEntryPoints(entryPoints)
+// 	s.scanAllDependencies()
+// 	files := s.processScannedFiles()
+
+// 	onStartWaitGroup.Wait()
+// 	return Parse{
+// 		fs:              fs,
+// 		res:             res,
+// 		files:           files,
+// 		entryPoints:     entryPointMeta,
+// 		uniqueKeyPrefix: uniqueKeyPrefix,
+// 	}
+// }
+
+// func (cache *runtimeCache) parseRuntime(options *config.Options) (source logger.Source, runtimeAST js_ast.AST, ok bool) {
+// 	key := runtimeCacheKey{
+// 		// All configuration options that the runtime code depends on must go here
+// 		MangleSyntax:      options.MangleSyntax,
+// 		MinifyIdentifiers: options.MinifyIdentifiers,
+// 		ES6:               runtime.CanUseES6(options.UnsupportedJSFeatures),
+// 	}
+
+// 	// Determine which source to use
+// 	if key.ES6 {
+// 		source = runtime.ES6Source
+// 	} else {
+// 		source = runtime.ES5Source
+// 	}
+
+// 	// Cache hit?
+// 	(func() {
+// 		cache.astMutex.Lock()
+// 		defer cache.astMutex.Unlock()
+// 		if cache.astMap != nil {
+// 			runtimeAST, ok = cache.astMap[key]
+// 		}
+// 	})()
+// 	if ok {
+// 		return
+// 	}
+
+// 	// Cache miss
+// 	var constraint int
+// 	if key.ES6 {
+// 		constraint = 2015
+// 	} else {
+// 		constraint = 5
+// 	}
+// 	log := logger.NewDeferLog(logger.DeferLogAll)
+// 	runtimeAST, ok = js_parser.Parse(log, source, js_parser.OptionsFromConfig(&config.Options{
+// 		// These configuration options must only depend on the key
+// 		MangleSyntax:      key.MangleSyntax,
+// 		MinifyIdentifiers: key.MinifyIdentifiers,
+// 		UnsupportedJSFeatures: compat.UnsupportedJSFeatures(
+// 			map[compat.Engine][]int{compat.ES: {constraint}}),
+
+// 		// Always do tree shaking for the runtime because we never want to
+// 		// include unnecessary runtime code
+// 		TreeShaking: true,
+// 	}))
+// 	if log.HasErrors() {
+// 		msgs := "Internal error: failed to parse runtime:\n"
+// 		for _, msg := range log.Done() {
+// 			msgs += msg.String(logger.OutputOptions{}, logger.TerminalInfo{})
+// 		}
+// 		panic(msgs[:len(msgs)-1])
+// 	}
+
+// 	// Cache for next time
+// 	if ok {
+// 		cache.astMutex.Lock()
+// 		defer cache.astMutex.Unlock()
+// 		if cache.astMap == nil {
+// 			cache.astMap = make(map[runtimeCacheKey]js_ast.AST)
+// 		}
+// 		cache.astMap[key] = runtimeAST
+// 	}
+// 	return
+// }

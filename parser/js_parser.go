@@ -12,9 +12,11 @@ import (
 	"github.com/mmmommm/dropts/ast"
 	"github.com/mmmommm/dropts/compat"
 	"github.com/mmmommm/dropts/config"
-	"github.com/mmmommm/dropts/helpers"
-	"github.com/mmmommm/dropts/lexer"
 	"github.com/mmmommm/dropts/logger"
+
+	// "github.com/mmmommm/dropts/helpers"
+	"github.com/mmmommm/dropts/lexer"
+	// "github.com/mmmommm/dropts/logger"
 	// "github.com/mmmommm/dropts/renamer"
 	// "github.com/mmmommm/dropts/runtime"
 )
@@ -33,7 +35,7 @@ import (
 // to have at least two separate passes to handle variable hoisting. See the
 // comment about scopesInOrder below for more information.
 type parser struct {
-	options                    Options
+	// options                    Options
 	log                        logger.Log
 	source                     logger.Source
 	tracker                    logger.LineColumnTracker
@@ -44,13 +46,13 @@ type parser struct {
 	latestReturnHadSemicolon   bool
 	hasESModuleSyntax          bool
 	warnedThisIsUndefined      bool
-	topLevelAwaitKeyword       logger.Range
+	// topLevelAwaitKeyword       logger.Range
 	fnOrArrowDataParse         fnOrArrowDataParse
 	fnOrArrowDataVisit         fnOrArrowDataVisit
 	fnOnlyDataVisit            fnOnlyDataVisit
 	allocatedNames             []string
-	latestArrowArgLoc          logger.Loc
-	forbidSuffixAfterAsLoc     logger.Loc
+	// latestArrowArgLoc          logger.Loc
+	// forbidSuffixAfterAsLoc     logger.Loc
 	currentScope               *ast.Scope
 	scopesForCurrentPart       []*ast.Scope
 	symbols                    []ast.Symbol
@@ -60,7 +62,7 @@ type parser struct {
 	moduleRef                  ast.Ref
 	importMetaRef              ast.Ref
 	promiseRef                 ast.Ref
-	findSymbolHelper           func(loc logger.Loc, name string) ast.Ref
+	// findSymbolHelper           func(loc logger.Loc, name string) ast.Ref
 	symbolForDefineHelper      func(int) ast.Ref
 	injectedDefineSymbols      []ast.Ref
 	injectedSymbolSources      map[ast.Ref]injectedSymbolSource
@@ -128,9 +130,9 @@ type parser struct {
 	exportStarImportRecords     []uint32
 
 	// These are for handling ES6 imports and exports
-	es6ImportKeyword        logger.Range
-	es6ExportKeyword        logger.Range
-	enclosingClassKeyword   logger.Range
+	// es6ImportKeyword        logger.Range
+	// es6ExportKeyword        logger.Range
+	// enclosingClassKeyword   logger.Range
 	importItemsForNamespace map[ast.Ref]map[string]ast.LocRef
 	isImportItem            map[ast.Ref]bool
 	namedImports            map[ast.Ref]ast.NamedImport
@@ -1161,21 +1163,21 @@ func hasValueForThisInCall(expr ast.Expr) bool {
 	}
 }
 
-func (p *parser) selectLocalKind(kind ast.LocalKind) ast.LocalKind {
-	// Safari workaround: Automatically avoid TDZ issues when bundling
-	if p.options.mode == config.ModeBundle && p.currentScope.Parent == nil {
-		return ast.LocalVar
-	}
+// func (p *parser) selectLocalKind(kind ast.LocalKind) ast.LocalKind {
+// 	// Safari workaround: Automatically avoid TDZ issues when bundling
+// 	if p.options.mode == config.ModeBundle && p.currentScope.Parent == nil {
+// 		return ast.LocalVar
+// 	}
 
-	// Optimization: use "let" instead of "const" because it's shorter. This is
-	// only done when bundling because assigning to "const" is only an error when
-	// bundling.
-	if p.options.mode == config.ModeBundle && kind == ast.LocalConst && p.options.mangleSyntax {
-		return ast.LocalLet
-	}
+// 	// Optimization: use "let" instead of "const" because it's shorter. This is
+// 	// only done when bundling because assigning to "const" is only an error when
+// 	// bundling.
+// 	if p.options.mode == config.ModeBundle && kind == ast.LocalConst && p.options.mangleSyntax {
+// 		return ast.LocalLet
+// 	}
 
-	return kind
-}
+// 	return kind
+// }
 
 func (p *parser) pushScopeForParsePass(kind ast.ScopeKind, loc logger.Loc) int {
 	parent := p.currentScope
@@ -1269,9 +1271,9 @@ func (p *parser) popScope() {
 			// symbols in an ESM file when bundling is enabled. We make no guarantee
 			// that "eval" will be able to reach these symbols and we allow them to be
 			// renamed or removed by tree shaking.
-			if p.options.mode == config.ModeBundle && p.currentScope.Parent == nil && p.hasESModuleSyntax {
-				continue
-			}
+			// if p.options.mode == config.ModeBundle && p.currentScope.Parent == nil && p.hasESModuleSyntax {
+			// 	continue
+			// }
 
 			p.symbols[member.Ref.InnerIndex].MustNotBeRenamed = true
 		}
@@ -1354,9 +1356,9 @@ func (p *parser) newSymbol(kind ast.SymbolKind, name string) ast.Ref {
 		OriginalName: name,
 		Link:         ast.InvalidRef,
 	})
-	if p.options.ts.Parse {
-		p.tsUseCounts = append(p.tsUseCounts, 0)
-	}
+	// if p.options.ts.Parse {
+	// 	p.tsUseCounts = append(p.tsUseCounts, 0)
+	// }
 	return ref
 }
 
@@ -1396,9 +1398,9 @@ func (p *parser) canMergeSymbols(scope *ast.Scope, existing ast.SymbolKind, new 
 	//   import {Foo} from 'bar'
 	//   class Foo {}
 	//
-	if p.options.ts.Parse && existing == ast.SymbolImport {
-		return mergeReplaceWithNew
-	}
+	// if p.options.ts.Parse && existing == ast.SymbolImport {
+	// 	return mergeReplaceWithNew
+	// }
 
 	// "enum Foo {} enum Foo {}"
 	if new == ast.SymbolTSEnum && existing == ast.SymbolTSEnum {
@@ -1689,9 +1691,9 @@ func (p *parser) recordUsage(ref ast.Ref) {
 	// The correctness of TypeScript-to-JavaScript conversion relies on accurate
 	// symbol use counts for the whole file, including dead code regions. This is
 	// tracked separately in a parser-only data structure.
-	if p.options.ts.Parse {
-		p.tsUseCounts[ref.InnerIndex]++
-	}
+	// if p.options.ts.Parse {
+	// 	p.tsUseCounts[ref.InnerIndex]++
+	// }
 }
 
 func (p *parser) ignoreUsage(ref ast.Ref) {
@@ -1751,10 +1753,10 @@ func (p *parser) callRuntime(loc logger.Loc, name string, args []ast.Expr) ast.E
 }
 
 func (p *parser) valueToSubstituteForRequire(loc logger.Loc) ast.Expr {
-	if p.source.Index != helpers.SourceIndex &&
-		config.ShouldCallRuntimeRequire(p.options.mode, p.options.outputFormat) {
-		return p.importFromRuntime(loc, "__require")
-	}
+	// if p.source.Index != helpers.SourceIndex &&
+	// 	config.ShouldCallRuntimeRequire(p.options.mode, p.options.outputFormat) {
+	// 	return p.importFromRuntime(loc, "__require")
+	// }
 
 	p.recordUsage(p.requireRef)
 	return ast.Expr{Loc: loc, Data: &ast.EIdentifier{Ref: p.requireRef}}
@@ -1955,7 +1957,7 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 
 	case lexer.TStringLiteral:
 		key = p.parseStringLiteral()
-		preferQuotedKey = !p.options.mangleSyntax
+		// preferQuotedKey = !p.options.mangleSyntax
 
 	case lexer.TBigIntegerLiteral:
 		key = ast.Expr{Loc: p.lexer.Loc(), Data: &ast.EBigInt{Value: p.lexer.Identifier}}
@@ -1980,7 +1982,7 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 		expr := p.parseExpr(ast.LComma)
 
 		// Handle index signatures
-		if p.options.ts.Parse && p.lexer.Token == lexer.TColon && wasIdentifier && opts.isClass {
+		if p.lexer.Token == lexer.TColon && wasIdentifier && opts.isClass {
 			if _, ok := expr.Data.(*ast.EIdentifier); ok {
 				if opts.tsDeclareRange.Len != 0 {
 					p.log.Add(logger.Error, &p.tracker, opts.tsDeclareRange, "\"declare\" cannot be used with an index signature")
@@ -2085,7 +2087,7 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 					}
 
 				case "abstract":
-					if opts.isClass && p.options.ts.Parse && !opts.isTSAbstract && raw == name {
+					if opts.isClass && !opts.isTSAbstract && raw == name {
 						opts.isTSAbstract = true
 						scopeIndex := len(p.scopesInOrder)
 						p.parseProperty(kind, opts, nil)
@@ -2095,7 +2097,7 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 
 				case "private", "protected", "public", "readonly", "override":
 					// Skip over TypeScript keywords
-					if opts.isClass && p.options.ts.Parse && raw == name {
+					if opts.isClass && raw == name {
 						return p.parseProperty(kind, opts, nil)
 					}
 				}
@@ -2156,18 +2158,11 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 			}, true
 		}
 	}
-
-	if p.options.ts.Parse {
-		// "class X { foo?: number }"
-		// "class X { foo!: number }"
-		if opts.isClass && (p.lexer.Token == lexer.TQuestion ||
-			(p.lexer.Token == lexer.TExclamation && !p.lexer.HasNewlineBefore)) {
-			p.lexer.Next()
-		}
-
-		// "class X { foo?<T>(): T }"
-		// "const x = { foo<T>(): T {} }"
-		p.skipTypeScriptTypeParameters()
+	// "class X { foo?: number }"
+	// "class X { foo!: number }"
+	if opts.isClass && (p.lexer.Token == lexer.TQuestion ||
+		(p.lexer.Token == lexer.TExclamation && !p.lexer.HasNewlineBefore)) {
+		p.lexer.Next()
 	}
 
 	// Parse a class field with an optional initial value
@@ -2184,7 +2179,7 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 		}
 
 		// Skip over types
-		if p.options.ts.Parse && p.lexer.Token == lexer.TColon {
+		if p.lexer.Token == lexer.TColon {
 			p.lexer.Next()
 			p.skipTypeScriptType(ast.LLowest)
 		}
@@ -2297,7 +2292,7 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 			isConstructor:      isConstructor,
 
 			// Only allow omitting the body if we're parsing TypeScript class
-			allowMissingBodyForTypeScript: p.options.ts.Parse && opts.isClass,
+			allowMissingBodyForTypeScript: opts.isClass,
 		})
 
 		// "class Foo { foo(): void; foo(): void {} }"
@@ -2415,7 +2410,7 @@ func (p *parser) parsePropertyBinding() ast.PropertyBinding {
 
 	case lexer.TStringLiteral:
 		key = p.parseStringLiteral()
-		preferQuotedKey = !p.options.mangleSyntax
+		// preferQuotedKey = !p.options.mangleSyntax
 
 	case lexer.TBigIntegerLiteral:
 		key = ast.Expr{Loc: p.lexer.Loc(), Data: &ast.EBigInt{Value: p.lexer.Identifier}}
@@ -2604,7 +2599,7 @@ func (p *parser) parseAsyncPrefixExpr(asyncRange logger.Range, level ast.L, flag
 		// "async<T>()"
 		// "async <T>() => {}"
 		case lexer.TLessThan:
-			if p.options.ts.Parse && p.trySkipTypeScriptTypeParametersThenOpenParenWithBacktracking() {
+			if p.trySkipTypeScriptTypeParametersThenOpenParenWithBacktracking() {
 				p.lexer.Next()
 				return p.parseParenExpr(asyncRange.Loc, level, parenExprOpts{isAsync: true, asyncRange: asyncRange})
 			}
@@ -14448,7 +14443,7 @@ func simplifyUnusedStringAdditionChain(expr ast.Expr) (ast.Expr, bool) {
 	return expr, false
 }
 
-func newParser(log logger.Log, source logger.Source, lexer lexer.Lexer, options *Options) *parser {
+func newParser(log logger.Log, source logger.Source, lexer lexer.Lexer) *parser {
 	// if options.defines == nil {
 	// 	defaultDefines := config.ProcessDefines(nil)
 	// 	options.defines = &defaultDefines
@@ -14457,10 +14452,10 @@ func newParser(log logger.Log, source logger.Source, lexer lexer.Lexer, options 
 	p := &parser{
 		log:               log,
 		source:            source,
-		tracker:           logger.MakeLineColumnTracker(&source),
+		// tracker:           logger.MakeLineColumnTracker(&source),
 		lexer:             lexer,
 		allowIn:           true,
-		options:           *options,
+		// options:           *options,
 		runtimeImports:    make(map[string]ast.Ref),
 		promiseRef:        ast.InvalidRef,
 		afterArrowBodyLoc: logger.Loc{Start: -1},
@@ -14505,7 +14500,8 @@ func newParser(log logger.Log, source logger.Source, lexer lexer.Lexer, options 
 var defaultJSXFactory = []string{"React", "createElement"}
 var defaultJSXFragment = []string{"React", "Fragment"}
 
-func Parse(log logger.Log, source logger.Source, options Options) (result ast.AST, ok bool) {
+//Parse(log logger.Log, source logger.Source, options Options)
+func Parse(log logger.Log, source logger.Source) (result ast.AST, ok bool) {
 	ok = true
 	defer func() {
 		r := recover()
@@ -14515,43 +14511,6 @@ func Parse(log logger.Log, source logger.Source, options Options) (result ast.AS
 			panic(r)
 		}
 	}()
-
-	// Default options for JSX elements
-	if len(options.jsx.Factory.Parts) == 0 {
-		options.jsx.Factory = config.JSXExpr{Parts: defaultJSXFactory}
-	}
-	if len(options.jsx.Fragment.Parts) == 0 && options.jsx.Fragment.Constant == nil {
-		options.jsx.Fragment = config.JSXExpr{Parts: defaultJSXFragment}
-	}
-
-	if !options.ts.Parse {
-		// Non-TypeScript files always get the real JavaScript class field behavior
-		options.useDefineForClassFields = config.True
-	} else if options.useDefineForClassFields == config.Unspecified {
-		// The default behavior for TypeScript files depends on the value of the
-		// "target" field and on the version of TypeScript:
-		//
-		//   * TypeScript ≥4.3 and "target": "ESNext" => "useDefineForClassFields": true
-		//   * Otherwise => "useDefineForClassFields": false
-		//
-		// Context: https://github.com/microsoft/TypeScript/pull/42663. This was
-		// silently changed in TypeScript 4.3. It's a breaking change even though
-		// it wasn't mentioned in the announcement blog post for TypeScript 4.3:
-		// https://devblogs.microsoft.com/typescript/announcing-typescript-4-3/.
-		if options.targetFromAPI == config.TargetWasConfiguredIncludingESNext ||
-			(options.tsTarget != nil && strings.EqualFold(options.tsTarget.Target, "ESNext")) {
-			options.useDefineForClassFields = config.True
-		} else {
-			options.useDefineForClassFields = config.False
-		}
-	}
-
-	// If there is no top-level esbuild "target" setting, include unsupported
-	// JavaScript features from the TypeScript "target" setting. Otherwise the
-	// TypeScript "target" setting is ignored.
-	if options.targetFromAPI == config.TargetWasUnconfigured && options.tsTarget != nil {
-		options.unsupportedJSFeatures |= options.tsTarget.UnsupportedJSFeatures
-	}
 
 	p := newParser(log, source, lexer.NewLexer(log, source), &options)
 
@@ -14600,36 +14559,6 @@ func Parse(log logger.Log, source logger.Source, options Options) (result ast.AS
 	var before = []ast.Part{nsExportPart}
 	var parts []ast.Part
 	var after []ast.Part
-
-	// Insert any injected import statements now that symbols have been declared
-	for _, file := range p.options.injectedFiles {
-		exportsNoConflict := make([]string, 0, len(file.Exports))
-		symbols := make(map[string]ast.Ref)
-		if file.DefineName != "" {
-			ref := p.newSymbol(ast.SymbolOther, file.DefineName)
-			p.moduleScope.Generated = append(p.moduleScope.Generated, ref)
-			symbols["default"] = ref
-			exportsNoConflict = append(exportsNoConflict, "default")
-			p.injectedDefineSymbols = append(p.injectedDefineSymbols, ref)
-		} else {
-			for _, export := range file.Exports {
-				if _, ok := p.moduleScope.Members[export.Alias]; !ok {
-					ref := p.newSymbol(ast.SymbolInjected, export.Alias)
-					p.moduleScope.Members[export.Alias] = ast.ScopeMember{Ref: ref}
-					symbols[export.Alias] = ref
-					exportsNoConflict = append(exportsNoConflict, export.Alias)
-					if p.injectedSymbolSources == nil {
-						p.injectedSymbolSources = make(map[ast.Ref]injectedSymbolSource)
-					}
-					p.injectedSymbolSources[ref] = injectedSymbolSource{
-						source: file.Source,
-						loc:    export.Loc,
-					}
-				}
-			}
-		}
-		before = p.generateImportStmt(file.Source.KeyPath.Text, exportsNoConflict, file.Source.Index, before, symbols)
-	}
 
 	// Bind symbols in a second pass over the AST. I started off doing this in a
 	// single pass, but it turns out it's pretty much impossible to do this

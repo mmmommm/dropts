@@ -305,7 +305,7 @@ type Lexer struct {
 	Number                          float64
 	rescanCloseBraceAsTemplateToken bool
 	forGlobalName                   bool
-	json                            json
+	// json                            json
 	prevErrorLoc                    logger.Loc
 
 	// Escape sequences in string literals are decoded lazily because they are
@@ -322,6 +322,7 @@ type Lexer struct {
 
 type LexerPanic struct{}
 
+// lexerの構造体を初期化して返す
 func NewLexer(log logger.Log, source logger.Source) Lexer {
 	lexer := Lexer{
 		log:               log,
@@ -335,6 +336,7 @@ func NewLexer(log logger.Log, source logger.Source) Lexer {
 	return lexer
 }
 
+// forGlobalNameをtrueにしたlexer構造体を初期化して返す
 func NewLexerGlobalName(log logger.Log, source logger.Source) Lexer {
 	lexer := Lexer{
 		log:               log,
@@ -349,35 +351,39 @@ func NewLexerGlobalName(log logger.Log, source logger.Source) Lexer {
 	return lexer
 }
 
-func NewLexerJSON(log logger.Log, source logger.Source, allowComments bool) Lexer {
-	lexer := Lexer{
-		log:               log,
-		source:            source,
-		tracker:           logger.MakeLineColumnTracker(&source),
-		prevErrorLoc:      logger.Loc{Start: -1},
-		FnOrArrowStartLoc: logger.Loc{Start: -1},
-		json: json{
-			parse:         true,
-			allowComments: allowComments,
-		},
-	}
-	lexer.step()
-	lexer.Next()
-	return lexer
-}
+// func NewLexerJSON(log logger.Log, source logger.Source, allowComments bool) Lexer {
+// 	lexer := Lexer{
+// 		log:               log,
+// 		source:            source,
+// 		tracker:           logger.MakeLineColumnTracker(&source),
+// 		prevErrorLoc:      logger.Loc{Start: -1},
+// 		FnOrArrowStartLoc: logger.Loc{Start: -1},
+// 		json: json{
+// 			parse:         true,
+// 			allowComments: allowComments,
+// 		},
+// 	}
+// 	lexer.step()
+// 	lexer.Next()
+// 	return lexer
+// }
 
+// lexer.Locにファイルの開始場所をindexで入れる
 func (lexer *Lexer) Loc() logger.Loc {
 	return logger.Loc{Start: int32(lexer.start)}
 }
 
+// lexer.RangeのStartフィールドににファイルの開始場所をindexで渡して、Lenにファイルの長さを渡す
 func (lexer *Lexer) Range() logger.Range {
 	return logger.Range{Loc: logger.Loc{Start: int32(lexer.start)}, Len: int32(lexer.end - lexer.start)}
 }
 
+// lexer.source.Contentsにrawデータをstringで入れる
 func (lexer *Lexer) Raw() string {
 	return lexer.source.Contents[lexer.start:lexer.end]
 }
 
+// エスケープされてるstringリテラルがうまくdecodeされてない場合にどうにかするやつ、よくわからん
 func (lexer *Lexer) StringLiteral() []uint16 {
 	if lexer.decodedStringLiteralOrNil == nil {
 		// Lazily decode escape sequences if needed
@@ -391,9 +397,11 @@ func (lexer *Lexer) StringLiteral() []uint16 {
 	return lexer.decodedStringLiteralOrNil
 }
 
+//　rawの中にある "\r" のindexが -1だった時にrawを全探索して "\r"を消す
 func (lexer *Lexer) CookedAndRawTemplateContents() ([]uint16, string) {
 	var raw string
 
+	// rawの中にcookするtemplateLiteralを入れる
 	switch lexer.Token {
 	case TNoSubstitutionTemplateLiteral, TTemplateTail:
 		// "`x`" or "}x`"
@@ -404,6 +412,7 @@ func (lexer *Lexer) CookedAndRawTemplateContents() ([]uint16, string) {
 		raw = lexer.source.Contents[lexer.start+1 : lexer.end-2]
 	}
 
+	// rawの中にある "\r" のindexが -1だった時にrawを全探索して "\r"を消す
 	if strings.IndexByte(raw, '\r') != -1 {
 		// From the specification:
 		//
@@ -444,14 +453,17 @@ func (lexer *Lexer) CookedAndRawTemplateContents() ([]uint16, string) {
 	return cooked, raw
 }
 
+// Tokenかどうかの確認
 func (lexer *Lexer) IsIdentifierOrKeyword() bool {
 	return lexer.Token >= TIdentifier
 }
 
+// 渡したtextがTokenかどうか確認する
 func (lexer *Lexer) IsContextualKeyword(text string) bool {
 	return lexer.Token == TIdentifier && lexer.Raw() == text
 }
 
+// 渡したtextがTokenか確認して違ったら ExpectedString で利用者の益となるlogを返す、その後字句解析を次に進める
 func (lexer *Lexer) ExpectContextualKeyword(text string) {
 	if !lexer.IsContextualKeyword(text) {
 		lexer.ExpectedString(fmt.Sprintf("%q", text))
@@ -459,6 +471,7 @@ func (lexer *Lexer) ExpectContextualKeyword(text string) {
 	lexer.Next()
 }
 
+// 解析を終わらせてerrorを返す
 func (lexer *Lexer) SyntaxError() {
 	loc := logger.Loc{Start: int32(lexer.end)}
 	message := "Unexpected end of file"
@@ -478,6 +491,7 @@ func (lexer *Lexer) SyntaxError() {
 	panic(LexerPanic{})
 }
 
+// asyncがawaitなしで定義されてるとかよくわからんエスケイプがある時とかに親切なエラーメッセージを返す
 func (lexer *Lexer) ExpectedString(text string) {
 	// Provide a friendly error message about "await" without "async"
 	if lexer.PrevTokenWasAwaitKeyword {
@@ -508,6 +522,7 @@ func (lexer *Lexer) ExpectedString(text string) {
 	panic(LexerPanic{})
 }
 
+// ExpectedStringとUnexpectedのラッパー
 func (lexer *Lexer) Expected(token T) {
 	if text, ok := tokenToString[token]; ok {
 		lexer.ExpectedString(text)
@@ -516,6 +531,7 @@ func (lexer *Lexer) Expected(token T) {
 	}
 }
 
+// EOFエラーか予測不能なものが入ってきた時に終了させる
 func (lexer *Lexer) Unexpected() {
 	found := fmt.Sprintf("%q", lexer.Raw())
 	if lexer.start == len(lexer.source.Contents) {
@@ -525,6 +541,7 @@ func (lexer *Lexer) Unexpected() {
 	panic(LexerPanic{})
 }
 
+// tokenが存在するか確認してあったら字句解析を進めて、なかったら予測できるものは親切なエラーを返して終了、意味わからん場合はpanicさせて終了する
 func (lexer *Lexer) Expect(token T) {
 	if lexer.Token != token {
 		lexer.Expected(token)
@@ -532,6 +549,7 @@ func (lexer *Lexer) Expect(token T) {
 	lexer.Next()
 }
 
+// Tokenがセミコロンである、もしくは改行していてかつ閉じカッコ、EOFでない場合はTokenがセミコロンでないかを確認する
 func (lexer *Lexer) ExpectOrInsertSemicolon() {
 	if lexer.Token == TSemicolon || (!lexer.HasNewlineBefore &&
 		lexer.Token != TCloseBrace && lexer.Token != TEndOfFile) {
@@ -607,6 +625,7 @@ func (lexer *Lexer) ExpectGreaterThan(isInsideJSXElement bool) {
 	}
 }
 
+//　"> < =" などの合体するTokenが送られてきた場合にどれに該当するかを確認する
 func (lexer *Lexer) maybeExpandEquals() {
 	switch lexer.codePoint {
 	case '>':
@@ -627,6 +646,7 @@ func (lexer *Lexer) maybeExpandEquals() {
 	}
 }
 
+// 渡ってきたtextがTokenを含んでいるかをboolで返す
 func IsIdentifier(text string) bool {
 	if len(text) == 0 {
 		return false
@@ -645,6 +665,7 @@ func IsIdentifier(text string) bool {
 	return true
 }
 
+// 渡ってきたES5かESNextのTokenを含んでいるかをboolで返す
 func IsIdentifierES5AndESNext(text string) bool {
 	if len(text) == 0 {
 		return false
@@ -663,6 +684,7 @@ func IsIdentifierES5AndESNext(text string) bool {
 	return true
 }
 
+// validationを通ったものだけをstringとして返す
 func ForceValidIdentifier(text string) string {
 	if IsIdentifier(text) {
 		return text
@@ -865,7 +887,9 @@ func IsWhitespace(codePoint rune) bool {
 	}
 }
 
+//　sourceとlocationを受け取ってIdentifierの範囲(位置)を返す
 func RangeOfIdentifier(source logger.Source, loc logger.Loc) logger.Range {
+	// textにlogger.Source.Contentsに入っている、identifierの部分を全て入れる
 	text := source.Contents[loc.Start:]
 	if len(text) == 0 {
 		return logger.Range{Loc: loc, Len: 0}
@@ -910,6 +934,7 @@ func RangeOfIdentifier(source logger.Source, loc logger.Loc) logger.Range {
 	return source.RangeOfString(loc)
 }
 
+// tokenを受け取ってJSXのやつかどうかを確認する
 func (lexer *Lexer) ExpectJSXElementChild(token T) {
 	if lexer.Token != token {
 		lexer.Expected(token)
@@ -917,6 +942,7 @@ func (lexer *Lexer) ExpectJSXElementChild(token T) {
 	lexer.NextJSXElementChild()
 }
 
+// 次のJSX要素の中身を確認する
 func (lexer *Lexer) NextJSXElementChild() {
 	lexer.HasNewlineBefore = false
 	originalStart := lexer.end
@@ -992,6 +1018,7 @@ func (lexer *Lexer) NextJSXElementChild() {
 	}
 }
 
+// JSXの中身を確認ししている
 func (lexer *Lexer) ExpectInsideJSXElement(token T) {
 	if lexer.Token != token {
 		lexer.Expected(token)
@@ -1192,6 +1219,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 	}
 }
 
+//　この中の無限ループで字句解析を行っている
 func (lexer *Lexer) Next() {
 	lexer.HasNewlineBefore = lexer.end == 0
 	lexer.HasPureCommentBefore = false
@@ -1485,9 +1513,9 @@ func (lexer *Lexer) Next() {
 						break singleLineComment
 					}
 				}
-				if lexer.json.parse && !lexer.json.allowComments {
-					lexer.addRangeError(lexer.Range(), "JSON does not support comments")
-				}
+				// if lexer.json.parse && !lexer.json.allowComments {
+				// 	lexer.addRangeError(lexer.Range(), "JSON does not support comments")
+				// }
 				lexer.scanCommentText()
 				continue
 
@@ -1518,9 +1546,9 @@ func (lexer *Lexer) Next() {
 						lexer.step()
 					}
 				}
-				if lexer.json.parse && !lexer.json.allowComments {
-					lexer.addRangeError(lexer.Range(), "JSON does not support comments")
-				}
+				// if lexer.json.parse && !lexer.json.allowComments {
+				// 	lexer.addRangeError(lexer.Range(), "JSON does not support comments")
+				// }
 				lexer.scanCommentText()
 				continue
 
@@ -1662,7 +1690,7 @@ func (lexer *Lexer) Next() {
 					lexer.step()
 
 					// Handle Windows CRLF
-					if lexer.codePoint == '\r' && !lexer.json.parse {
+					if lexer.codePoint == '\r' {
 						lexer.step()
 						if lexer.codePoint == '\n' {
 							lexer.step()
@@ -1713,7 +1741,7 @@ func (lexer *Lexer) Next() {
 					// Non-ASCII strings need the slow path
 					if lexer.codePoint >= 0x80 {
 						needsSlowPath = true
-					} else if lexer.json.parse && lexer.codePoint < 0x20 {
+					} else if lexer.codePoint < 0x20 {
 						lexer.SyntaxError()
 					}
 				}
@@ -1737,7 +1765,7 @@ func (lexer *Lexer) Next() {
 				lexer.decodedStringLiteralOrNil = copy
 			}
 
-			if quote == '\'' && lexer.json.parse {
+			if quote == '\'' {
 				lexer.addRangeError(lexer.Range(), "JSON strings must use double quotes")
 			}
 
@@ -2403,18 +2431,18 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 				continue
 
 			case 'v':
-				if lexer.json.parse {
-					return nil, false, start + i - width2
-				}
+				// if lexer.json.parse {
+				// 	return nil, false, start + i - width2
+				// }
 
 				decoded = append(decoded, '\v')
 				continue
 
 			case '0', '1', '2', '3', '4', '5', '6', '7':
 				octalStart := i - 2
-				if lexer.json.parse {
-					return nil, false, start + i - width2
-				}
+				// if lexer.json.parse {
+				// 	return nil, false, start + i - width2
+				// }
 
 				// 1-3 digit octal
 				isBad := false
@@ -2452,9 +2480,9 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 				lexer.LegacyOctalLoc = logger.Loc{Start: int32(start + i - 2)}
 
 			case 'x':
-				if lexer.json.parse {
-					return nil, false, start + i - width2
-				}
+				// if lexer.json.parse {
+				// 	return nil, false, start + i - width2
+				// }
 
 				// 2-digit hexadecimal
 				value := '\000'
@@ -2483,9 +2511,9 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 				i += width3
 
 				if c3 == '{' {
-					if lexer.json.parse {
-						return nil, false, start + i - width2
-					}
+					// if lexer.json.parse {
+					// 	return nil, false, start + i - width2
+					// }
 
 					// Variable-length
 					hexStart := i - width - width2 - width3
@@ -2547,9 +2575,9 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 				c = value
 
 			case '\r':
-				if lexer.json.parse {
-					return nil, false, start + i - width2
-				}
+				// if lexer.json.parse {
+				// 	return nil, false, start + i - width2
+				// }
 
 				// Ignore line continuations. A line continuation is not an escaped newline.
 				if i < len(text) && text[i] == '\n' {
@@ -2559,22 +2587,22 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 				continue
 
 			case '\n', '\u2028', '\u2029':
-				if lexer.json.parse {
-					return nil, false, start + i - width2
-				}
+				// if lexer.json.parse {
+				// 	return nil, false, start + i - width2
+				// }
 
 				// Ignore line continuations. A line continuation is not an escaped newline.
 				continue
 
 			default:
-				if lexer.json.parse {
+				// if lexer.json.parse {
 					switch c2 {
 					case '"', '\\', '/':
 
 					default:
 						return nil, false, start + i - width2
 					}
-				}
+				// }
 
 				c = c2
 			}
