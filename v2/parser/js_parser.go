@@ -46,13 +46,13 @@ type parser struct {
 	latestReturnHadSemicolon   bool
 	hasESModuleSyntax          bool
 	warnedThisIsUndefined      bool
-	// topLevelAwaitKeyword       logger.Range
+	topLevelAwaitKeyword       logger.Range
 	fnOrArrowDataParse         fnOrArrowDataParse
 	fnOrArrowDataVisit         fnOrArrowDataVisit
 	fnOnlyDataVisit            fnOnlyDataVisit
 	allocatedNames             []string
-	// latestArrowArgLoc          logger.Loc
-	// forbidSuffixAfterAsLoc     logger.Loc
+	latestArrowArgLoc          logger.Loc
+	forbidSuffixAfterAsLoc     logger.Loc
 	currentScope               *ast.Scope
 	scopesForCurrentPart       []*ast.Scope
 	symbols                    []ast.Symbol
@@ -62,7 +62,7 @@ type parser struct {
 	moduleRef                  ast.Ref
 	importMetaRef              ast.Ref
 	promiseRef                 ast.Ref
-	// findSymbolHelper           func(loc logger.Loc, name string) ast.Ref
+	indSymbolHelper           func(loc logger.Loc, name string) ast.Ref
 	symbolForDefineHelper      func(int) ast.Ref
 	injectedDefineSymbols      []ast.Ref
 	injectedSymbolSources      map[ast.Ref]injectedSymbolSource
@@ -1912,6 +1912,7 @@ func (p *parser) checkForLegacyOctalLiteral(e ast.E) {
 }
 
 // This assumes the caller has already checked for TStringLiteral or TNoSubstitutionTemplateLiteral
+// stringをparseする
 func (p *parser) parseStringLiteral() ast.Expr {
 	var legacyOctalLoc logger.Loc
 	loc := p.lexer.Loc()
@@ -2638,9 +2639,9 @@ func (p *parser) parseFnExpr(loc logger.Loc, isAsync bool, asyncRange logger.Ran
 	}
 
 	// Even anonymous functions can have TypeScript type parameters
-	if p.options.ts.Parse {
-		p.skipTypeScriptTypeParameters()
-	}
+	// if p.options.ts.Parse {
+	// 	p.skipTypeScriptTypeParameters()
+	// }
 
 	await := allowIdent
 	yield := allowIdent
@@ -14512,7 +14513,7 @@ func Parse(log logger.Log, source logger.Source) (result ast.AST, ok bool) {
 		}
 	}()
 
-	p := newParser(log, source, lexer.NewLexer(log, source), &options)
+	p := newParser(log, source, lexer.NewLexer(log, source))
 
 	// Consume a leading hashbang comment
 	hashbang := ""
@@ -14712,22 +14713,22 @@ func ParseJSXExpr(text string, kind JSXExprKind) (config.JSXExpr, bool) {
 }
 
 // Say why this the current file is being considered an ES module
-func (p *parser) whyESModule() (notes []logger.MsgData) {
-	var where logger.Range
-	switch {
-	case p.es6ImportKeyword.Len > 0:
-		where = p.es6ImportKeyword
-	case p.es6ExportKeyword.Len > 0:
-		where = p.es6ExportKeyword
-	case p.topLevelAwaitKeyword.Len > 0:
-		where = p.topLevelAwaitKeyword
-	}
-	if where.Len > 0 {
-		notes = []logger.MsgData{p.tracker.MsgData(where,
-			fmt.Sprintf("This file is considered an ECMAScript module because of the %q keyword here:", p.source.TextForRange(where)))}
-	}
-	return
-}
+// func (p *parser) whyESModule() (notes []logger.MsgData) {
+// 	var where logger.Range
+// 	switch {
+// 	case p.es6ImportKeyword.Len > 0:
+// 		where = p.es6ImportKeyword
+// 	case p.es6ExportKeyword.Len > 0:
+// 		where = p.es6ExportKeyword
+// 	case p.topLevelAwaitKeyword.Len > 0:
+// 		where = p.topLevelAwaitKeyword
+// 	}
+// 	if where.Len > 0 {
+// 		notes = []logger.MsgData{p.tracker.MsgData(where,
+// 			fmt.Sprintf("This file is considered an ECMAScript module because of the %q keyword here:", p.source.TextForRange(where)))}
+// 	}
+// 	return
+// }
 
 func (p *parser) prepareForVisitPass() {
 	p.pushScopeForVisitPass(ast.ScopeEntry, logger.Loc{Start: locModuleScope})

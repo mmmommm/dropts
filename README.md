@@ -23,3 +23,18 @@ playgroundで特定の文字列を受け取ってcompileした結果を返すapi
 esbuildのようにcliなどでファイル単位で渡したものを全てcompileしてファイル依存解消してminifyして返すようにするためには設計考える必要あり。
 
 input ~~Lexer~~> Tokens ~~Parser~~> AST ~~Compiler~~> Javascript
+
+# package
+## lexer
+渡されたTypescriptコードを型を落としたTokenに変換する
+内部で `lexer.skipTypescript` を読んで型を落とす
+
+## parser
+渡されたTokenをASTに変換する
+
+## compiler
+渡されたASTをJavascriptコードに変換する
+
+オプションはつけないあくまでAPIに文字列として渡されたTypescriptコードを変換することだけする
+
+`parser.Parse` の内部で `newLexer` を読んでいるので `parser.Parse` にstringでtypescriptコードを渡す

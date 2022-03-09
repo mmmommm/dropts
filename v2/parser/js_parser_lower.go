@@ -308,7 +308,7 @@ func (p *parser) lowerFunction(
 	}
 
 	// Lower async functions
-	if p.options.unsupportedJSFeatures.Has(compat.AsyncAwait) && *isAsync {
+	if *isAsync {
 		// Use the shortened form if we're an arrow function
 		if preferExpr != nil {
 			*preferExpr = true

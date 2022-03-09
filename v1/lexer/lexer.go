@@ -21,7 +21,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/mmmommm/dropts/ast"
-	"github.com/mmmommm/dropts/logger"
 )
 
 func RemoveMultiLineCommentIndent(prefix string, text string) string {
@@ -297,6 +296,7 @@ type Lexer struct {
 	PrevTokenWasAwaitKeyword        bool
 	CommentsToPreserveBefore        []ast.Comment
 	AllOriginalComments             []ast.Comment
+	// codePointが-1の場合はEOF
 	codePoint                       rune
 	Identifier                      string
 	JSXFactoryPragmaComment         logger.Span
@@ -1220,6 +1220,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 }
 
 //　この中の無限ループで字句解析を行っている
+// EOFかエラーでbreakするまで実行
 func (lexer *Lexer) Next() {
 	lexer.HasNewlineBefore = lexer.end == 0
 	lexer.HasPureCommentBefore = false
@@ -1227,6 +1228,7 @@ func (lexer *Lexer) Next() {
 	lexer.CommentsToPreserveBefore = nil
 
 	for {
+		// lexerを進めてる
 		lexer.start = lexer.end
 		lexer.Token = 0
 
@@ -2632,6 +2634,7 @@ func (lexer *Lexer) RescanCloseBraceAsTemplateToken() {
 	lexer.rescanCloseBraceAsTemplateToken = false
 }
 
+// コメントの文字数だけlexerを進めて改行がある場合はlexer.ApproximateNewlineCountを増やす
 func (lexer *Lexer) step() {
 	codePoint, width := utf8.DecodeRuneInString(lexer.source.Contents[lexer.current:])
 
