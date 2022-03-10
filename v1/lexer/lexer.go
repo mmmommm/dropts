@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mmmommm/dropts/ast"
+	"github.com/mmmommm/dropts/v1/location"
 )
 
 func RemoveMultiLineCommentIndent(prefix string, text string) string {
@@ -276,18 +277,18 @@ type json struct {
 }
 
 type Lexer struct {
-	log                             logger.Log
-	source                          logger.Source
-	tracker                         logger.LineColumnTracker
+	// log                             location.Log
+	source                          location.Source
+	tracker                         location.LineColumnTracker
 	current                         int
 	start                           int
 	end                             int
 	ApproximateNewlineCount         int
-	LegacyOctalLoc                  logger.Loc
-	AwaitKeywordLoc                 logger.Loc
-	FnOrArrowStartLoc               logger.Loc
-	PreviousBackslashQuoteInJSX     logger.Range
-	LegacyHTMLCommentRange          logger.Range
+	LegacyOctalLoc                  location.Loc
+	AwaitKeywordLoc                 location.Loc
+	FnOrArrowStartLoc               location.Loc
+	PreviousBackslashQuoteInJSX     location.Range
+	LegacyHTMLCommentRange          location.Range
 	Token                           T
 	HasNewlineBefore                bool
 	HasPureCommentBefore            bool
@@ -299,14 +300,14 @@ type Lexer struct {
 	// codePointが-1の場合はEOF
 	codePoint                       rune
 	Identifier                      string
-	JSXFactoryPragmaComment         logger.Span
-	JSXFragmentPragmaComment        logger.Span
-	SourceMappingURL                logger.Span
+	// JSXFactoryPragmaComment         location.Span
+	// JSXFragmentPragmaComment        location.Span
+	// SourceMappingURL                location.Span
 	Number                          float64
 	rescanCloseBraceAsTemplateToken bool
 	forGlobalName                   bool
 	// json                            json
-	prevErrorLoc                    logger.Loc
+	// prevErrorLoc                    location.Loc
 
 	// Escape sequences in string literals are decoded lazily because they are
 	// not interpreted inside tagged templates, and tagged templates can contain
@@ -323,13 +324,9 @@ type Lexer struct {
 type LexerPanic struct{}
 
 // lexerの構造体を初期化して返す
-func NewLexer(log logger.Log, source logger.Source) Lexer {
+func NewLexer(source location.Source) Lexer {
 	lexer := Lexer{
-		log:               log,
-		source:            source,
-		tracker:           logger.MakeLineColumnTracker(&source),
-		prevErrorLoc:      logger.Loc{Start: -1},
-		FnOrArrowStartLoc: logger.Loc{Start: -1},
+		source: source,
 	}
 	lexer.step()
 	lexer.Next()
@@ -337,27 +334,27 @@ func NewLexer(log logger.Log, source logger.Source) Lexer {
 }
 
 // forGlobalNameをtrueにしたlexer構造体を初期化して返す
-func NewLexerGlobalName(log logger.Log, source logger.Source) Lexer {
-	lexer := Lexer{
-		log:               log,
-		source:            source,
-		tracker:           logger.MakeLineColumnTracker(&source),
-		prevErrorLoc:      logger.Loc{Start: -1},
-		FnOrArrowStartLoc: logger.Loc{Start: -1},
-		forGlobalName:     true,
-	}
-	lexer.step()
-	lexer.Next()
-	return lexer
-}
-
-// func NewLexerJSON(log logger.Log, source logger.Source, allowComments bool) Lexer {
+// func NewLexerGlobalName(log location.Log, source location.Source) Lexer {
 // 	lexer := Lexer{
 // 		log:               log,
 // 		source:            source,
-// 		tracker:           logger.MakeLineColumnTracker(&source),
-// 		prevErrorLoc:      logger.Loc{Start: -1},
-// 		FnOrArrowStartLoc: logger.Loc{Start: -1},
+// 		tracker:           location.MakeLineColumnTracker(&source),
+// 		prevErrorLoc:      location.Loc{Start: -1},
+// 		FnOrArrowStartLoc: location.Loc{Start: -1},
+// 		forGlobalName:     true,
+// 	}
+// 	lexer.step()
+// 	lexer.Next()
+// 	return lexer
+// }
+
+// func NewLexerJSON(log location.Log, source location.Source, allowComments bool) Lexer {
+// 	lexer := Lexer{
+// 		log:               log,
+// 		source:            source,
+// 		tracker:           location.MakeLineColumnTracker(&source),
+// 		prevErrorLoc:      location.Loc{Start: -1},
+// 		FnOrArrowStartLoc: location.Loc{Start: -1},
 // 		json: json{
 // 			parse:         true,
 // 			allowComments: allowComments,
@@ -369,13 +366,13 @@ func NewLexerGlobalName(log logger.Log, source logger.Source) Lexer {
 // }
 
 // lexer.Locにファイルの開始場所をindexで入れる
-func (lexer *Lexer) Loc() logger.Loc {
-	return logger.Loc{Start: int32(lexer.start)}
+func (lexer *Lexer) Loc() location.Loc {
+	return location.Loc{Start: int32(lexer.start)}
 }
 
 // lexer.RangeのStartフィールドににファイルの開始場所をindexで渡して、Lenにファイルの長さを渡す
-func (lexer *Lexer) Range() logger.Range {
-	return logger.Range{Loc: logger.Loc{Start: int32(lexer.start)}, Len: int32(lexer.end - lexer.start)}
+func (lexer *Lexer) Range() location.Range {
+	return location.Range{Loc: location.Loc{Start: int32(lexer.start)}, Len: int32(lexer.end - lexer.start)}
 }
 
 // lexer.source.Contentsにrawデータをstringで入れる
@@ -473,7 +470,7 @@ func (lexer *Lexer) ExpectContextualKeyword(text string) {
 
 // 解析を終わらせてerrorを返す
 func (lexer *Lexer) SyntaxError() {
-	loc := logger.Loc{Start: int32(lexer.end)}
+	loc := location.Loc{Start: int32(lexer.end)}
 	message := "Unexpected end of file"
 	if lexer.end < len(lexer.source.Contents) {
 		c, _ := utf8.DecodeRuneInString(lexer.source.Contents[lexer.end:])
@@ -487,7 +484,7 @@ func (lexer *Lexer) SyntaxError() {
 			message = "Syntax error '\"'"
 		}
 	}
-	lexer.addRangeError(logger.Range{Loc: loc}, message)
+	lexer.addRangeError(location.Range{Loc: loc}, message)
 	panic(LexerPanic{})
 }
 
@@ -495,12 +492,12 @@ func (lexer *Lexer) SyntaxError() {
 func (lexer *Lexer) ExpectedString(text string) {
 	// Provide a friendly error message about "await" without "async"
 	if lexer.PrevTokenWasAwaitKeyword {
-		var notes []logger.MsgData
+		var notes []location.MsgData
 		if lexer.FnOrArrowStartLoc.Start != -1 {
-			note := lexer.tracker.MsgData(logger.Range{Loc: lexer.FnOrArrowStartLoc},
+			note := lexer.tracker.MsgData(location.Range{Loc: lexer.FnOrArrowStartLoc},
 				"Consider adding the \"async\" keyword here:")
 			note.Location.Suggestion = "async"
-			notes = []logger.MsgData{note}
+			notes = []location.MsgData{note}
 		}
 		lexer.addRangeErrorWithNotes(RangeOfIdentifier(lexer.source, lexer.AwaitKeywordLoc),
 			"\"await\" can only be used inside an \"async\" function",
@@ -888,11 +885,11 @@ func IsWhitespace(codePoint rune) bool {
 }
 
 //　sourceとlocationを受け取ってIdentifierの範囲(位置)を返す
-func RangeOfIdentifier(source logger.Source, loc logger.Loc) logger.Range {
+func RangeOfIdentifier(source location.Source, loc location.Loc) location.Range {
 	// textにlogger.Source.Contentsに入っている、identifierの部分を全て入れる
 	text := source.Contents[loc.Start:]
 	if len(text) == 0 {
-		return logger.Range{Loc: loc, Len: 0}
+		return location.Range{Loc: loc, Len: 0}
 	}
 
 	i := 0
@@ -923,7 +920,7 @@ func RangeOfIdentifier(source logger.Source, loc logger.Loc) logger.Range {
 					}
 				}
 			} else if !IsIdentifierContinue(c2) {
-				return logger.Range{Loc: loc, Len: int32(i)}
+				return location.Range{Loc: loc, Len: int32(i)}
 			} else {
 				i += width2
 			}
@@ -1107,8 +1104,8 @@ func (lexer *Lexer) NextInsideJSXElement() {
 
 					case -1: // This indicates the end of the file
 						lexer.start = lexer.end
-						lexer.addRangeErrorWithNotes(logger.Range{Loc: lexer.Loc()}, "Expected \"*/\" to terminate multi-line comment",
-							[]logger.MsgData{lexer.tracker.MsgData(startRange, "The multi-line comment starts here:")})
+						lexer.addRangeErrorWithNotes(location.Range{Loc: lexer.Loc()}, "Expected \"*/\" to terminate multi-line comment",
+							[]location.MsgData{lexer.tracker.MsgData(startRange, "The multi-line comment starts here:")})
 						panic(LexerPanic{})
 
 					default:
@@ -1122,7 +1119,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 			}
 
 		case '\'', '"':
-			var backslash logger.Range
+			var backslash location.Range
 			quote := lexer.codePoint
 			needsDecode := false
 			lexer.step()
@@ -1138,7 +1135,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 					lexer.step()
 
 				case '\\':
-					backslash = logger.Range{Loc: logger.Loc{Start: int32(lexer.end)}, Len: 1}
+					backslash = location.Range{Loc: location.Loc{Start: int32(lexer.end)}, Len: 1}
 					lexer.step()
 					continue
 
@@ -1157,7 +1154,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 					}
 					lexer.step()
 				}
-				backslash = logger.Range{}
+				backslash = location.Range{}
 			}
 
 			lexer.Token = TStringLiteral
@@ -1201,7 +1198,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 							lexer.step()
 						}
 					} else {
-						lexer.addRangeError(logger.Range{Loc: logger.Loc{Start: lexer.Range().End()}},
+						lexer.addRangeError(location.Range{Loc: location.Loc{Start: lexer.Range().End()}},
 							fmt.Sprintf("Expected identifier after %q in namespaced JSX name", lexer.Raw()))
 					}
 				}
@@ -1447,8 +1444,6 @@ func (lexer *Lexer) Next() {
 				if lexer.codePoint == '>' && lexer.HasNewlineBefore {
 					lexer.step()
 					lexer.LegacyHTMLCommentRange = lexer.Range()
-					lexer.log.Add(logger.Warning, &lexer.tracker, lexer.Range(),
-						"Treating \"-->\" as the start of a legacy HTML single-line comment")
 				singleLineHTMLCloseComment:
 					for {
 						switch lexer.codePoint {
@@ -1540,8 +1535,8 @@ func (lexer *Lexer) Next() {
 
 					case -1: // This indicates the end of the file
 						lexer.start = lexer.end
-						lexer.addRangeErrorWithNotes(logger.Range{Loc: lexer.Loc()}, "Expected \"*/\" to terminate multi-line comment",
-							[]logger.MsgData{lexer.tracker.MsgData(startRange, "The multi-line comment starts here:")})
+						lexer.addRangeErrorWithNotes(location.Range{Loc: lexer.Loc()}, "Expected \"*/\" to terminate multi-line comment",
+							[]location.MsgData{lexer.tracker.MsgData(startRange, "The multi-line comment starts here:")})
 						panic(LexerPanic{})
 
 					default:
@@ -1602,7 +1597,7 @@ func (lexer *Lexer) Next() {
 					lexer.step()
 					lexer.step()
 					lexer.LegacyHTMLCommentRange = lexer.Range()
-					lexer.log.Add(logger.Warning, &lexer.tracker, lexer.Range(),
+					lexer.log.Add(location.Warning, &lexer.tracker, lexer.Range(),
 						"Treating \"<!--\" as the start of a legacy HTML single-line comment")
 				singleLineHTMLOpenComment:
 					for {
@@ -1701,12 +1696,12 @@ func (lexer *Lexer) Next() {
 					}
 
 				case -1: // This indicates the end of the file
-					lexer.addRangeError(logger.Range{Loc: logger.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
+					lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
 					panic(LexerPanic{})
 
 				case '\r':
 					if quote != '`' {
-						lexer.addRangeError(logger.Range{Loc: logger.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
+						lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
 						panic(LexerPanic{})
 					}
 
@@ -1715,7 +1710,7 @@ func (lexer *Lexer) Next() {
 
 				case '\n':
 					if quote != '`' {
-						lexer.addRangeError(logger.Range{Loc: logger.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
+						lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
 						panic(LexerPanic{})
 					}
 
@@ -1897,7 +1892,7 @@ func (lexer *Lexer) scanIdentifierWithEscapes(kind identifierKind) (string, T) {
 		identifier = identifier[1:] // Skip over the "#"
 	}
 	if !IsIdentifier(identifier) {
-		lexer.addRangeError(logger.Range{Loc: logger.Loc{Start: int32(lexer.start)}, Len: int32(lexer.end - lexer.start)},
+		lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(lexer.start)}, Len: int32(lexer.end - lexer.start)},
 			fmt.Sprintf("Invalid identifier: %q", text))
 	}
 
@@ -2249,14 +2244,14 @@ func (lexer *Lexer) ScanRegExp() {
 					bit := uint32(1) << uint32(lexer.codePoint-'a')
 					if (bit & bits) != 0 {
 						// Reject duplicate flags
-						r1 := logger.Range{Loc: logger.Loc{Start: int32(lexer.start)}, Len: 1}
-						r2 := logger.Range{Loc: logger.Loc{Start: int32(lexer.end)}, Len: 1}
+						r1 := location.Range{Loc: location.Loc{Start: int32(lexer.start)}, Len: 1}
+						r2 := location.Range{Loc: location.Loc{Start: int32(lexer.end)}, Len: 1}
 						for r1.Loc.Start < r2.Loc.Start && lexer.source.Contents[r1.Loc.Start] != byte(lexer.codePoint) {
 							r1.Loc.Start++
 						}
-						lexer.log.AddWithNotes(logger.Error, &lexer.tracker, r2,
+						lexer.log.AddWithNotes(location.Error, &lexer.tracker, r2,
 							fmt.Sprintf("Duplicate flag \"%c\" in regular expression", lexer.codePoint),
-							[]logger.MsgData{lexer.tracker.MsgData(r1,
+							[]location.MsgData{lexer.tracker.MsgData(r1,
 								fmt.Sprintf("The first \"%c\" was here:", lexer.codePoint))})
 					} else {
 						bits |= bit
@@ -2472,14 +2467,14 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 
 				// Forbid the use of octal literals other than "\0"
 				if isBad || text[octalStart:i] != "\\0" {
-					lexer.LegacyOctalLoc = logger.Loc{Start: int32(start + octalStart)}
+					lexer.LegacyOctalLoc = location.Loc{Start: int32(start + octalStart)}
 				}
 
 			case '8', '9':
 				c = c2
 
 				// Forbid the invalid octal literals "\8" and "\9"
-				lexer.LegacyOctalLoc = logger.Loc{Start: int32(start + i - 2)}
+				lexer.LegacyOctalLoc = location.Loc{Start: int32(start + i - 2)}
 
 			case 'x':
 				// if lexer.json.parse {
@@ -2550,7 +2545,7 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 					}
 
 					if isOutOfRange && reportErrors {
-						lexer.addRangeError(logger.Range{Loc: logger.Loc{Start: int32(start + hexStart)}, Len: int32(i - hexStart)},
+						lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(start + hexStart)}, Len: int32(i - hexStart)},
 							"Unicode escape sequence is out of range")
 						panic(LexerPanic{})
 					}
@@ -2658,7 +2653,7 @@ func (lexer *Lexer) step() {
 	lexer.current += width
 }
 
-func (lexer *Lexer) addRangeError(r logger.Range, text string) {
+func (lexer *Lexer) addRangeError(r location.Range, text string) {
 	// Don't report multiple errors in the same spot
 	if r.Loc == lexer.prevErrorLoc {
 		return
@@ -2666,11 +2661,11 @@ func (lexer *Lexer) addRangeError(r logger.Range, text string) {
 	lexer.prevErrorLoc = r.Loc
 
 	if !lexer.IsLogDisabled {
-		lexer.log.Add(logger.Error, &lexer.tracker, r, text)
+		lexer.log.Add(location.Error, &lexer.tracker, r, text)
 	}
 }
 
-func (lexer *Lexer) addRangeErrorWithSuggestion(r logger.Range, text string, suggestion string) {
+func (lexer *Lexer) addRangeErrorWithSuggestion(r location.Range, text string, suggestion string) {
 	// Don't report multiple errors in the same spot
 	if r.Loc == lexer.prevErrorLoc {
 		return
@@ -2680,11 +2675,11 @@ func (lexer *Lexer) addRangeErrorWithSuggestion(r logger.Range, text string, sug
 	if !lexer.IsLogDisabled {
 		data := lexer.tracker.MsgData(r, text)
 		data.Location.Suggestion = suggestion
-		lexer.log.AddMsg(logger.Msg{Kind: logger.Error, Data: data})
+		lexer.log.AddMsg(location.Msg{Kind: location.Error, Data: data})
 	}
 }
 
-func (lexer *Lexer) addRangeErrorWithNotes(r logger.Range, text string, notes []logger.MsgData) {
+func (lexer *Lexer) addRangeErrorWithNotes(r location.Range, text string, notes []location.MsgData) {
 	// Don't report multiple errors in the same spot
 	if r.Loc == lexer.prevErrorLoc {
 		return
@@ -2692,7 +2687,7 @@ func (lexer *Lexer) addRangeErrorWithNotes(r logger.Range, text string, notes []
 	lexer.prevErrorLoc = r.Loc
 
 	if !lexer.IsLogDisabled {
-		lexer.log.AddWithNotes(logger.Error, &lexer.tracker, r, text, notes)
+		lexer.log.AddWithNotes(location.Error, &lexer.tracker, r, text, notes)
 	}
 }
 
@@ -2718,25 +2713,25 @@ const (
 	pragmaSkipSpaceFirst
 )
 
-func scanForPragmaArg(kind pragmaArg, start int, pragma string, text string) (logger.Span, bool) {
+func scanForPragmaArg(kind pragmaArg, start int, pragma string, text string) (location.Span, bool) {
 	text = text[len(pragma):]
 	start += len(pragma)
 
 	if text == "" {
-		return logger.Span{}, false
+		return location.Span{}, false
 	}
 
 	// One or more whitespace characters
 	c, width := utf8.DecodeRuneInString(text)
 	if kind == pragmaSkipSpaceFirst {
 		if !IsWhitespace(c) {
-			return logger.Span{}, false
+			return location.Span{}, false
 		}
 		for IsWhitespace(c) {
 			text = text[width:]
 			start += width
 			if text == "" {
-				return logger.Span{}, false
+				return location.Span{}, false
 			}
 			c, width = utf8.DecodeRuneInString(text)
 		}
@@ -2755,10 +2750,10 @@ func scanForPragmaArg(kind pragmaArg, start int, pragma string, text string) (lo
 		}
 	}
 
-	return logger.Span{
+	return location.Span{
 		Text: text[:i],
-		Range: logger.Range{
-			Loc: logger.Loc{Start: int32(start)},
+		Range: location.Range{
+			Loc: location.Loc{Start: int32(start)},
 			Len: int32(i),
 		},
 	}, true
@@ -2772,7 +2767,7 @@ func (lexer *Lexer) scanCommentText() {
 	// Save the original comment text so we can subtract comments from the
 	// character frequency analysis used by symbol minification
 	lexer.AllOriginalComments = append(lexer.AllOriginalComments, ast.Comment{
-		Loc:  logger.Loc{Start: int32(lexer.start)},
+		Loc:  location.Loc{Start: int32(lexer.start)},
 		Text: text,
 	})
 
@@ -2822,7 +2817,7 @@ func (lexer *Lexer) scanCommentText() {
 		}
 
 		lexer.CommentsToPreserveBefore = append(lexer.CommentsToPreserveBefore, ast.Comment{
-			Loc:  logger.Loc{Start: int32(lexer.start)},
+			Loc:  location.Loc{Start: int32(lexer.start)},
 			Text: text,
 		})
 	}
