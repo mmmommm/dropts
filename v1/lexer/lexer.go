@@ -279,7 +279,7 @@ type json struct {
 type Lexer struct {
 	// log                             location.Log
 	source                          location.Source
-	tracker                         location.LineColumnTracker
+	// tracker                         location.LineColumnTracker
 	current                         int
 	start                           int
 	end                             int
@@ -300,9 +300,9 @@ type Lexer struct {
 	// codePointが-1の場合はEOF
 	codePoint                       rune
 	Identifier                      string
-	// JSXFactoryPragmaComment         location.Span
-	// JSXFragmentPragmaComment        location.Span
-	// SourceMappingURL                location.Span
+	JSXFactoryPragmaComment         location.Span
+	JSXFragmentPragmaComment        location.Span
+	SourceMappingURL                location.Span
 	Number                          float64
 	rescanCloseBraceAsTemplateToken bool
 	forGlobalName                   bool
@@ -470,7 +470,7 @@ func (lexer *Lexer) ExpectContextualKeyword(text string) {
 
 // 解析を終わらせてerrorを返す
 func (lexer *Lexer) SyntaxError() {
-	loc := location.Loc{Start: int32(lexer.end)}
+	//loc := location.Loc{Start: int32(lexer.end)}
 	message := "Unexpected end of file"
 	if lexer.end < len(lexer.source.Contents) {
 		c, _ := utf8.DecodeRuneInString(lexer.source.Contents[lexer.end:])
@@ -484,7 +484,8 @@ func (lexer *Lexer) SyntaxError() {
 			message = "Syntax error '\"'"
 		}
 	}
-	lexer.addRangeError(location.Range{Loc: loc}, message)
+	//lexer.addRangeError(location.Range{Loc: loc}, message)
+	fmt.Print(message)
 	panic(LexerPanic{})
 }
 
@@ -492,16 +493,14 @@ func (lexer *Lexer) SyntaxError() {
 func (lexer *Lexer) ExpectedString(text string) {
 	// Provide a friendly error message about "await" without "async"
 	if lexer.PrevTokenWasAwaitKeyword {
-		var notes []location.MsgData
-		if lexer.FnOrArrowStartLoc.Start != -1 {
-			note := lexer.tracker.MsgData(location.Range{Loc: lexer.FnOrArrowStartLoc},
-				"Consider adding the \"async\" keyword here:")
-			note.Location.Suggestion = "async"
-			notes = []location.MsgData{note}
-		}
-		lexer.addRangeErrorWithNotes(RangeOfIdentifier(lexer.source, lexer.AwaitKeywordLoc),
-			"\"await\" can only be used inside an \"async\" function",
-			notes)
+		//var notes []location.MsgData
+		// if lexer.FnOrArrowStartLoc.Start != -1 {
+		// 	note := lexer.tracker.MsgData(location.Range{Loc: lexer.FnOrArrowStartLoc},
+		// 		"Consider adding the \"async\" keyword here:")
+		// 	note.Location.Suggestion = "async"
+		// 	//notes = []location.MsgData{note}
+		// }
+		fmt.Print("\"await\" can only be used inside an \"async\" function")
 		panic(LexerPanic{})
 	}
 
@@ -515,7 +514,7 @@ func (lexer *Lexer) ExpectedString(text string) {
 		suggestion = text[1 : len(text)-1]
 	}
 
-	lexer.addRangeErrorWithSuggestion(lexer.Range(), fmt.Sprintf("Expected %s but found %s", text, found), suggestion)
+	fmt.Sprintf("Expected %s but found %s: %s", text, found, suggestion)
 	panic(LexerPanic{})
 }
 
@@ -534,7 +533,7 @@ func (lexer *Lexer) Unexpected() {
 	if lexer.start == len(lexer.source.Contents) {
 		found = "end of file"
 	}
-	lexer.addRangeError(lexer.Range(), fmt.Sprintf("Unexpected %s", found))
+	fmt.Sprintf("Unexpected %s", found)
 	panic(LexerPanic{})
 }
 
@@ -1087,7 +1086,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 
 			case '*':
 				lexer.step()
-				startRange := lexer.Range()
+				//startRange := lexer.Range()
 			multiLineComment:
 				for {
 					switch lexer.codePoint {
@@ -1104,8 +1103,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 
 					case -1: // This indicates the end of the file
 						lexer.start = lexer.end
-						lexer.addRangeErrorWithNotes(location.Range{Loc: lexer.Loc()}, "Expected \"*/\" to terminate multi-line comment",
-							[]location.MsgData{lexer.tracker.MsgData(startRange, "The multi-line comment starts here:")})
+						fmt.Print("Expected \"*/\" to terminate multi-line comment")
 						panic(LexerPanic{})
 
 					default:
@@ -1198,8 +1196,7 @@ func (lexer *Lexer) NextInsideJSXElement() {
 							lexer.step()
 						}
 					} else {
-						lexer.addRangeError(location.Range{Loc: location.Loc{Start: lexer.Range().End()}},
-							fmt.Sprintf("Expected identifier after %q in namespaced JSX name", lexer.Raw()))
+						fmt.Sprintf("Expected identifier after %q in namespaced JSX name", lexer.Raw())
 					}
 				}
 
@@ -1518,7 +1515,7 @@ func (lexer *Lexer) Next() {
 
 			case '*':
 				lexer.step()
-				startRange := lexer.Range()
+				//startRange := lexer.Range()
 			multiLineComment:
 				for {
 					switch lexer.codePoint {
@@ -1535,8 +1532,7 @@ func (lexer *Lexer) Next() {
 
 					case -1: // This indicates the end of the file
 						lexer.start = lexer.end
-						lexer.addRangeErrorWithNotes(location.Range{Loc: lexer.Loc()}, "Expected \"*/\" to terminate multi-line comment",
-							[]location.MsgData{lexer.tracker.MsgData(startRange, "The multi-line comment starts here:")})
+						fmt.Print("Expected \"*/\" to terminate multi-line comment")
 						panic(LexerPanic{})
 
 					default:
@@ -1597,8 +1593,7 @@ func (lexer *Lexer) Next() {
 					lexer.step()
 					lexer.step()
 					lexer.LegacyHTMLCommentRange = lexer.Range()
-					lexer.log.Add(location.Warning, &lexer.tracker, lexer.Range(),
-						"Treating \"<!--\" as the start of a legacy HTML single-line comment")
+					fmt.Print("Treating \"<!--\" as the start of a legacy HTML single-line comment")
 				singleLineHTMLOpenComment:
 					for {
 						switch lexer.codePoint {
@@ -1696,12 +1691,12 @@ func (lexer *Lexer) Next() {
 					}
 
 				case -1: // This indicates the end of the file
-					lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
+					fmt.Print("Unterminated string literal")
 					panic(LexerPanic{})
 
 				case '\r':
 					if quote != '`' {
-						lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
+						fmt.Print("Unterminated string literal")
 						panic(LexerPanic{})
 					}
 
@@ -1710,7 +1705,7 @@ func (lexer *Lexer) Next() {
 
 				case '\n':
 					if quote != '`' {
-						lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(lexer.end)}}, "Unterminated string literal")
+						fmt.Print("Unterminated string literal")
 						panic(LexerPanic{})
 					}
 
@@ -1763,7 +1758,7 @@ func (lexer *Lexer) Next() {
 			}
 
 			if quote == '\'' {
-				lexer.addRangeError(lexer.Range(), "JSON strings must use double quotes")
+				fmt.Print("JSON strings must use double quotes")
 			}
 
 		case '_', '$',
@@ -1892,8 +1887,7 @@ func (lexer *Lexer) scanIdentifierWithEscapes(kind identifierKind) (string, T) {
 		identifier = identifier[1:] // Skip over the "#"
 	}
 	if !IsIdentifier(identifier) {
-		lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(lexer.start)}, Len: int32(lexer.end - lexer.start)},
-			fmt.Sprintf("Invalid identifier: %q", text))
+		fmt.Sprintf("Invalid identifier: %q", text)
 	}
 
 	// Escaped keywords are not allowed to work as actual keywords, but they are
@@ -2249,10 +2243,6 @@ func (lexer *Lexer) ScanRegExp() {
 						for r1.Loc.Start < r2.Loc.Start && lexer.source.Contents[r1.Loc.Start] != byte(lexer.codePoint) {
 							r1.Loc.Start++
 						}
-						lexer.log.AddWithNotes(location.Error, &lexer.tracker, r2,
-							fmt.Sprintf("Duplicate flag \"%c\" in regular expression", lexer.codePoint),
-							[]location.MsgData{lexer.tracker.MsgData(r1,
-								fmt.Sprintf("The first \"%c\" was here:", lexer.codePoint))})
 					} else {
 						bits |= bit
 					}
@@ -2513,7 +2503,6 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 					// }
 
 					// Variable-length
-					hexStart := i - width - width2 - width3
 					isFirst := true
 					isOutOfRange := false
 				variableLength:
@@ -2545,8 +2534,6 @@ func (lexer *Lexer) tryToDecodeEscapeSequences(start int, text string, reportErr
 					}
 
 					if isOutOfRange && reportErrors {
-						lexer.addRangeError(location.Range{Loc: location.Loc{Start: int32(start + hexStart)}, Len: int32(i - hexStart)},
-							"Unicode escape sequence is out of range")
 						panic(LexerPanic{})
 					}
 				} else {
@@ -2651,44 +2638,6 @@ func (lexer *Lexer) step() {
 	lexer.codePoint = codePoint
 	lexer.end = lexer.current
 	lexer.current += width
-}
-
-func (lexer *Lexer) addRangeError(r location.Range, text string) {
-	// Don't report multiple errors in the same spot
-	if r.Loc == lexer.prevErrorLoc {
-		return
-	}
-	lexer.prevErrorLoc = r.Loc
-
-	if !lexer.IsLogDisabled {
-		lexer.log.Add(location.Error, &lexer.tracker, r, text)
-	}
-}
-
-func (lexer *Lexer) addRangeErrorWithSuggestion(r location.Range, text string, suggestion string) {
-	// Don't report multiple errors in the same spot
-	if r.Loc == lexer.prevErrorLoc {
-		return
-	}
-	lexer.prevErrorLoc = r.Loc
-
-	if !lexer.IsLogDisabled {
-		data := lexer.tracker.MsgData(r, text)
-		data.Location.Suggestion = suggestion
-		lexer.log.AddMsg(location.Msg{Kind: location.Error, Data: data})
-	}
-}
-
-func (lexer *Lexer) addRangeErrorWithNotes(r location.Range, text string, notes []location.MsgData) {
-	// Don't report multiple errors in the same spot
-	if r.Loc == lexer.prevErrorLoc {
-		return
-	}
-	lexer.prevErrorLoc = r.Loc
-
-	if !lexer.IsLogDisabled {
-		lexer.log.AddWithNotes(location.Error, &lexer.tracker, r, text, notes)
-	}
 }
 
 func hasPrefixWithWordBoundary(text string, prefix string) bool {

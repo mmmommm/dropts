@@ -16,6 +16,18 @@ import (
 	"github.com/mmmommm/dropts/v1/location"
 )
 
+func HashCombine(seed uint32, hash uint32) uint32 {
+	return seed ^ (hash + 0x9e3779b9 + (seed << 6) + (seed >> 2))
+}
+
+func HashCombineString(seed uint32, text string) uint32 {
+	seed = HashCombine(seed, uint32(len(text)))
+	for _, c := range text {
+		seed = HashCombine(seed, uint32(c))
+	}
+	return seed
+}
+
 // This parser does two passes:
 //
 // 1. Parse the source into an AST, create the scope tree, and declare symbols.
@@ -614,19 +626,18 @@ func (dc *duplicateCaseChecker) check(p *parser, expr ast.Expr) {
 		if (*entry & mask) != 0 {
 			for _, c := range dc.cases {
 				if c.hash == hash {
-					if equals, couldBeIncorrect := duplicateCaseEquals(c.value, expr); equals {
-						r := p.source.RangeOfOperatorBefore(expr.Loc, "case")
-						earlierRange := p.source.RangeOfOperatorBefore(c.value.Loc, "case")
-						text := "This case clause will never be evaluated because it duplicates an earlier case clause"
-						if couldBeIncorrect {
-							text = "This case clause may never be evaluated because it likely duplicates an earlier case clause"
-						}
-						kind := location.Warning
-						if p.suppressWarningsAboutWeirdCode {
-							kind = location.Debug
-						}
-						p.log.AddWithNotes(kind, &p.tracker, r, text,
-							[]location.MsgData{p.tracker.MsgData(earlierRange, "The earlier case clause is here:")})
+					if equals, _ := duplicateCaseEquals(c.value, expr); equals {
+						// r := p.source.RangeOfOperatorBefore(expr.Loc, "case")
+						// earlierRange := p.source.RangeOfOperatorBefore(c.value.Loc, "case")
+						// text := "This case clause will never be evaluated because it duplicates an earlier case clause"
+						// if couldBeIncorrect {
+						// 	text = "This case clause may never be evaluated because it likely duplicates an earlier case clause"
+						// }
+						//kind := location.Warning
+						// if p.suppressWarningsAboutWeirdCode {
+						// 	kind = location.Debug
+						// }
+						fmt.Print("The earlier case clause is here:")
 					}
 					return
 				}
@@ -651,40 +662,40 @@ func duplicateCaseHash(expr ast.Expr) (uint32, bool) {
 
 	case *ast.EBoolean:
 		if e.Value {
-			return helpers.HashCombine(2, 1), true
+			return HashCombine(2, 1), true
 		}
-		return helpers.HashCombine(2, 0), true
+		return HashCombine(2, 0), true
 
 	case *ast.ENumber:
 		bits := math.Float64bits(e.Value)
-		return helpers.HashCombine(helpers.HashCombine(3, uint32(bits)), uint32(bits>>32)), true
+		return HashCombine(HashCombine(3, uint32(bits)), uint32(bits>>32)), true
 
 	case *ast.EString:
 		hash := uint32(4)
 		for _, c := range e.Value {
-			hash = helpers.HashCombine(hash, uint32(c))
+			hash = HashCombine(hash, uint32(c))
 		}
 		return hash, true
 
 	case *ast.EBigInt:
 		hash := uint32(5)
 		for _, c := range e.Value {
-			hash = helpers.HashCombine(hash, uint32(c))
+			hash = HashCombine(hash, uint32(c))
 		}
 		return hash, true
 
 	case *ast.EIdentifier:
-		return helpers.HashCombine(6, e.Ref.InnerIndex), true
+		return HashCombine(6, e.Ref.InnerIndex), true
 
 	case *ast.EDot:
 		if target, ok := duplicateCaseHash(e.Target); ok {
-			return helpers.HashCombineString(helpers.HashCombine(7, target), e.Name), true
+			return HashCombineString(HashCombine(7, target), e.Name), true
 		}
 
 	case *ast.EIndex:
 		if target, ok := duplicateCaseHash(e.Target); ok {
 			if index, ok := duplicateCaseHash(e.Index); ok {
-				return helpers.HashCombine(helpers.HashCombine(8, target), index), true
+				return HashCombine(HashCombine(8, target), index), true
 			}
 		}
 	}
@@ -1457,15 +1468,10 @@ func (p *parser) canMergeSymbols(scope *ast.Scope, existing ast.SymbolKind, new 
 }
 
 func (p *parser) addSymbolAlreadyDeclaredError(name string, newLoc location.Loc, oldLoc location.Loc) {
-	p.log.AddWithNotes(location.Error, &p.tracker,
-		lexer.RangeOfIdentifier(p.source, newLoc),
-		fmt.Sprintf("The symbol %q has already been declared", name),
 
-		[]location.MsgData{p.tracker.MsgData(
-			lexer.RangeOfIdentifier(p.source, oldLoc),
-			fmt.Sprintf("The symbol %q was originally declared here:", name),
-		)},
-	)
+	fmt.Sprintf("The symbol %q has already been declared", name)
+	lexer.RangeOfIdentifier(p.source, oldLoc)
+	fmt.Sprintf("The symbol %q was originally declared here:", name)
 }
 
 func (p *parser) declareSymbol(kind ast.SymbolKind, loc location.Loc, name string) ast.Ref {
@@ -1830,21 +1836,6 @@ func (from *deferredErrors) mergeInto(to *deferredErrors) {
 	}
 	if from.arraySpreadFeature.Len > 0 {
 		to.arraySpreadFeature = from.arraySpreadFeature
-	}
-}
-
-func (p *parser) logExprErrors(errors *deferredErrors) {
-	if errors.invalidExprDefaultValue.Len > 0 {
-		p.log.Add(location.Error, &p.tracker, errors.invalidExprDefaultValue, "Unexpected \"=\"")
-	}
-
-	if errors.invalidExprAfterQuestion.Len > 0 {
-		r := errors.invalidExprAfterQuestion
-		p.log.Add(location.Error, &p.tracker, r, fmt.Sprintf("Unexpected %q", p.source.Contents[r.Loc.Start:r.Loc.Start+r.Len]))
-	}
-
-	if errors.arraySpreadFeature.Len > 0 {
-		p.markSyntaxFeature(compat.ArraySpread, errors.arraySpreadFeature)
 	}
 }
 
@@ -2748,7 +2739,7 @@ func (p *parser) parseParenExpr(loc location.Loc, level ast.L, opts parenExprOpt
 	p.fnOrArrowDataParse = oldFnOrArrowData
 
 	// Are these arguments to an arrow function?
-	if p.lexer.Token == lexer.TEqualsGreaterThan || opts.forceArrowFn || (p.options.ts.Parse && p.lexer.Token == lexer.TColon) {
+	if p.lexer.Token == lexer.TEqualsGreaterThan || opts.forceArrowFn || (p.lexer.Token == lexer.TColon) {
 		// Arrow functions are not allowed inside certain expressions
 		if level > ast.LAssign {
 			p.lexer.Unexpected()
