@@ -8,12 +8,12 @@ import (
 
 	"github.com/mmmommm/dropts/ast"
 	"github.com/mmmommm/dropts/compat"
-	"github.com/mmmommm/dropts/logger"
+	"github.com/mmmommm/dropts/location"
 )
 
 type DefineArgs struct {
-	Loc             logger.Loc
-	FindSymbol      func(logger.Loc, string) ast.Ref
+	Loc             location.Loc
+	FindSymbol      func(location.Loc, string) ast.Ref
 	SymbolForDefine func(int) ast.Ref
 }
 
@@ -296,7 +296,7 @@ type Options struct {
 	ChunkPathTemplate []PathTemplate
 	AssetPathTemplate []PathTemplate
 
-	Plugins []Plugin
+	//Plugins []Plugin
 
 	NeedsMetafile bool
 
@@ -344,8 +344,8 @@ func UnusedImportsFromTsconfigValues(preserveImportsNotUsedAsValues bool, preser
 }
 
 type TSTarget struct {
-	Source                logger.Source
-	Range                 logger.Range
+	Source                location.Source
+	Range                 location.Range
 	Target                string
 	UnsupportedJSFeatures compat.JSFeature
 }
@@ -465,20 +465,20 @@ func ShouldCallRuntimeRequire(mode Mode, outputFormat Format) bool {
 }
 
 type InjectedDefine struct {
-	Source logger.Source
+	Source location.Source
 	Data   ast.E
 	Name   string
 }
 
 type InjectedFile struct {
-	Source     logger.Source
+	Source     location.Source
 	Exports    []InjectableExport
 	DefineName string
 }
 
 type InjectableExport struct {
 	Alias string
-	Loc   logger.Loc
+	Loc   location.Loc
 }
 
 var filterMutex sync.Mutex
@@ -532,83 +532,83 @@ func CompileFilterForPlugin(pluginName string, kind string, filter string) (*reg
 	return result, nil
 }
 
-func PluginAppliesToPath(path logger.Path, filter *regexp.Regexp, namespace string) bool {
-	return (namespace == "" || path.Namespace == namespace) && filter.MatchString(path.Text)
-}
+// func PluginAppliesToPath(path location.Path, filter *regexp.Regexp, namespace string) bool {
+// 	return (namespace == "" || path.Namespace == namespace) && filter.MatchString(path.Text)
+// }
 
-////////////////////////////////////////////////////////////////////////////////
-// Plugin API
+// ////////////////////////////////////////////////////////////////////////////////
+// // Plugin API
 
-type Plugin struct {
-	Name      string
-	OnStart   []OnStart
-	OnResolve []OnResolve
-	OnLoad    []OnLoad
-}
+// type Plugin struct {
+// 	Name      string
+// 	OnStart   []OnStart
+// 	OnResolve []OnResolve
+// 	OnLoad    []OnLoad
+// }
 
-type OnStart struct {
-	Name     string
-	Callback func() OnStartResult
-}
+// type OnStart struct {
+// 	Name     string
+// 	Callback func() OnStartResult
+// }
 
-type OnStartResult struct {
-	Msgs        []logger.Msg
-	ThrownError error
-}
+// type OnStartResult struct {
+// 	Msgs        []location.Msg
+// 	ThrownError error
+// }
 
-type OnResolve struct {
-	Name      string
-	Filter    *regexp.Regexp
-	Namespace string
-	Callback  func(OnResolveArgs) OnResolveResult
-}
+// type OnResolve struct {
+// 	Name      string
+// 	Filter    *regexp.Regexp
+// 	Namespace string
+// 	Callback  func(OnResolveArgs) OnResolveResult
+// }
 
-type OnResolveArgs struct {
-	Path       string
-	Importer   logger.Path
-	ResolveDir string
-	Kind       ast.ImportKind
-	PluginData interface{}
-}
+// type OnResolveArgs struct {
+// 	Path       string
+// 	Importer   location.Path
+// 	ResolveDir string
+// 	Kind       ast.ImportKind
+// 	PluginData interface{}
+// }
 
-type OnResolveResult struct {
-	PluginName string
+// type OnResolveResult struct {
+// 	PluginName string
 
-	Path             logger.Path
-	External         bool
-	IsSideEffectFree bool
-	PluginData       interface{}
+// 	Path             location.Path
+// 	External         bool
+// 	IsSideEffectFree bool
+// 	PluginData       interface{}
 
-	Msgs        []logger.Msg
-	ThrownError error
+// 	Msgs        []location.Msg
+// 	ThrownError error
 
-	AbsWatchFiles []string
-	AbsWatchDirs  []string
-}
+// 	AbsWatchFiles []string
+// 	AbsWatchDirs  []string
+// }
 
-type OnLoad struct {
-	Name      string
-	Filter    *regexp.Regexp
-	Namespace string
-	Callback  func(OnLoadArgs) OnLoadResult
-}
+// type OnLoad struct {
+// 	Name      string
+// 	Filter    *regexp.Regexp
+// 	Namespace string
+// 	Callback  func(OnLoadArgs) OnLoadResult
+// }
 
-type OnLoadArgs struct {
-	Path       logger.Path
-	PluginData interface{}
-}
+// type OnLoadArgs struct {
+// 	Path       location.Path
+// 	PluginData interface{}
+// }
 
-type OnLoadResult struct {
-	PluginName string
+// type OnLoadResult struct {
+// 	PluginName string
 
-	Contents      *string
-	AbsResolveDir string
-	Loader        Loader
-	PluginData    interface{}
+// 	Contents      *string
+// 	AbsResolveDir string
+// 	Loader        Loader
+// 	PluginData    interface{}
 
-	Msgs        []logger.Msg
-	ThrownError error
+// 	Msgs        []location.Msg
+// 	ThrownError error
 
-	AbsWatchFiles []string
-	AbsWatchDirs  []string
-}
+// 	AbsWatchFiles []string
+// 	AbsWatchDirs  []string
+// }

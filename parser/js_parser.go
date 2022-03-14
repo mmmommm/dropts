@@ -15,6 +15,102 @@ import (
 	"github.com/mmmommm/dropts/lexer"
 	"github.com/mmmommm/dropts/location"
 )
+func (p *parser) markSyntaxFeature(feature compat.JSFeature, r logger.Range) (didGenerateError bool) {
+	didGenerateError = true
+
+	if !p.options.unsupportedJSFeatures.Has(feature) {
+		if feature == compat.TopLevelAwait && !p.options.outputFormat.KeepES6ImportExportSyntax() {
+			p.log.Add(logger.Error, &p.tracker, r, fmt.Sprintf(
+				"Top-level await is currently not supported with the %q output format", p.options.outputFormat.String()))
+			return
+		}
+
+		didGenerateError = false
+		return
+	}
+
+	var name string
+	where, notes := p.prettyPrintTargetEnvironment(feature)
+
+	switch feature {
+	case compat.DefaultArgument:
+		name = "default arguments"
+
+	case compat.RestArgument:
+		name = "rest arguments"
+
+	case compat.ArraySpread:
+		name = "array spread"
+
+	case compat.ForOf:
+		name = "for-of loops"
+
+	case compat.ObjectAccessors:
+		name = "object accessors"
+
+	case compat.ObjectExtensions:
+		name = "object literal extensions"
+
+	case compat.Destructuring:
+		name = "destructuring"
+
+	case compat.NewTarget:
+		name = "new.target"
+
+	case compat.Const:
+		name = "const"
+
+	case compat.Let:
+		name = "let"
+
+	case compat.Class:
+		name = "class syntax"
+
+	case compat.Generator:
+		name = "generator functions"
+
+	case compat.AsyncAwait:
+		name = "async functions"
+
+	case compat.AsyncGenerator:
+		name = "async generator functions"
+
+	case compat.ForAwait:
+		name = "for-await loops"
+
+	case compat.NestedRestBinding:
+		name = "non-identifier array rest patterns"
+
+	case compat.ImportAssertions:
+		fmt.Sprintf("Using an arbitrary value as the second argument to \"import()\" is not possible in %s", where)
+		return
+
+	case compat.TopLevelAwait:
+		fmt.Sprintf("Top-level await is not available in %s", where)
+		return
+
+	case compat.ArbitraryModuleNamespaceNames:
+		fmt.Sprintf("Using a string as a module namespace identifier name is not supported in %s", where)
+		return
+
+	case compat.BigInt:
+		// Transforming these will never be supported
+		fmt.Sprintf("Big integer literals are not available in %s", where)
+		return
+
+	case compat.ImportMeta:
+		// This can't be polyfilled
+		fmt.Sprintf("\"import.meta\" is not available in %s and will be empty", where)
+		return
+
+	default:
+		fmt.Sprintf("This feature is not available in %s", where)
+		return
+	}
+
+	fmt.Sprintf("Transforming %s to %s is not supported yet", name, where)
+	return
+}
 
 // hash値の計算
 func HashCombine(seed uint32, hash uint32) uint32 {
@@ -73,13 +169,13 @@ type parser struct {
 	// indSymbolHelper           func(loc location.Loc, name string) ast.Ref
 	symbolForDefineHelper      func(int) ast.Ref
 	injectedDefineSymbols      []ast.Ref
-	injectedSymbolSources      map[ast.Ref]injectedSymbolSource
+	//injectedSymbolSources      map[ast.Ref]injectedSymbolSource
 	symbolUses                 map[ast.Ref]ast.SymbolUse
 	declaredSymbols            []ast.DeclaredSymbol
 	runtimeImports             map[string]ast.Ref
 	duplicateCaseChecker       duplicateCaseChecker
 	unrepresentableIdentifiers map[string]bool
-	// legacyOctalLiterals        map[ast.E]location.Range
+	legacyOctalLiterals        map[ast.E]location.Range
 
 	// For strict mode handling
 	hoistedRefForSloppyModeBlockFn map[ast.Ref]ast.Ref
@@ -1869,13 +1965,13 @@ type deferredArrowArgErrors struct {
 
 func (p *parser) logArrowArgErrors(errors *deferredArrowArgErrors) {
 	if errors.invalidExprAwait.Len > 0 {
-		r := errors.invalidExprAwait
-		p.log.Add(location.Error, &p.tracker, r, "Cannot use an \"await\" expression here:")
+		// r := errors.invalidExprAwait
+		fmt.Print("Cannot use an \"await\" expression here:")
 	}
 
 	if errors.invalidExprYield.Len > 0 {
-		r := errors.invalidExprYield
-		p.log.Add(location.Error, &p.tracker, r, "Cannot use a \"yield\" expression here:")
+		// r := errors.invalidExprYield
+		fmt.Print("Cannot use a \"yield\" expression here:")
 	}
 }
 
@@ -1953,12 +2049,7 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 		p.lexer.Next()
 
 	case lexer.TPrivateIdentifier:
-		if !opts.isClass || len(opts.tsDecorators) > 0 {
-			p.lexer.Expected(lexer.TIdentifier)
-		}
-		if opts.tsDeclareRange.Len != 0 {
-			p.log.Add(location.Error, &p.tracker, opts.tsDeclareRange, "\"declare\" cannot be used with a private identifier")
-		}
+		p.lexer.Expected(lexer.TIdentifier)
 		key = ast.Expr{Loc: p.lexer.Loc(), Data: &ast.EPrivateIdentifier{Ref: p.storeNameInRef(p.lexer.Identifier)}}
 		p.lexer.Next()
 
@@ -1970,11 +2061,11 @@ func (p *parser) parseProperty(kind ast.PropertyKind, opts propertyOpts, errors 
 		expr := p.parseExpr(ast.LComma)
 
 		// Handle index signatures
-		if p.lexer.Token == lexer.TColon && wasIdentifier && opts.isClass {
+		if p.lexer.Token == lexer.TColon && wasIdentifier {
 			if _, ok := expr.Data.(*ast.EIdentifier); ok {
-				if opts.tsDeclareRange.Len != 0 {
-					p.log.Add(location.Error, &p.tracker, opts.tsDeclareRange, "\"declare\" cannot be used with an index signature")
-				}
+				// if opts.tsDeclareRange.Len != 0 {
+				// 	p.log.Add(location.Error, &p.tracker, opts.tsDeclareRange, "\"declare\" cannot be used with an index signature")
+				// }
 
 				// "[key: string]: any;"
 				p.lexer.Next()
@@ -6376,7 +6467,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 		if isForAwait {
 			awaitRange := p.lexer.Range()
 			if p.fnOrArrowDataParse.await != allowExpr {
-				p.log.Add(location.Error, &p.tracker, awaitRange, "Cannot use \"await\" outside an async function")
+				fmt.Print("Cannot use \"await\" outside an async function")
 				isForAwait = false
 			} else {
 				didGenerateError := p.markSyntaxFeature(compat.ForAwait, awaitRange)
@@ -14431,14 +14522,14 @@ func simplifyUnusedStringAdditionChain(expr ast.Expr) (ast.Expr, bool) {
 	return expr, false
 }
 
-func newParser(log location.Log, source location.Source, lexer lexer.Lexer) *parser {
+func newParser(source location.Source, lexer lexer.Lexer) *parser {
 	// if options.defines == nil {
 	// 	defaultDefines := config.ProcessDefines(nil)
 	// 	options.defines = &defaultDefines
 	// }
 
 	p := &parser{
-		log:               log,
+		// log:               log,
 		source:            source,
 		// tracker:           location.MakeLineColumnTracker(&source),
 		lexer:             lexer,
@@ -14489,7 +14580,7 @@ var defaultJSXFactory = []string{"React", "createElement"}
 var defaultJSXFragment = []string{"React", "Fragment"}
 
 //Parse(log location.Log, source location.Source, options Options)
-func Parse(log location.Log, source location.Source) (result ast.AST, ok bool) {
+func Parse(source location.Source) (result ast.AST, ok bool) {
 	ok = true
 	defer func() {
 		r := recover()
@@ -14500,7 +14591,7 @@ func Parse(log location.Log, source location.Source) (result ast.AST, ok bool) {
 		}
 	}()
 
-	p := newParser(log, source, lexer.NewLexer(log, source))
+	p := newParser(source, lexer.NewLexer(log, source))
 
 	// Consume a leading hashbang comment
 	hashbang := ""
@@ -14510,8 +14601,8 @@ func Parse(log location.Log, source location.Source) (result ast.AST, ok bool) {
 	}
 
 	// Allow top-level await
-	p.fnOrArrowDataParse.await = allowExpr
-	p.fnOrArrowDataParse.isTopLevel = true
+	// p.fnOrArrowDataParse.await = allowExpr
+	// p.fnOrArrowDataParse.isTopLevel = true
 
 	// Parse the file in the first pass, but do not bind symbols
 	stmts := p.parseStmtsUpTo(lexer.TEndOfFile, parseStmtOpts{
@@ -14548,74 +14639,70 @@ func Parse(log location.Log, source location.Source) (result ast.AST, ok bool) {
 	var parts []ast.Part
 	var after []ast.Part
 
+	// 一旦文字列しか渡さないのでtree shakingの部分はコメントアウト
 	// Bind symbols in a second pass over the AST. I started off doing this in a
 	// single pass, but it turns out it's pretty much impossible to do this
 	// correctly while handling arrow functions because of the grammar
 	// ambiguities.
-	if !p.options.treeShaking {
-		// When tree shaking is disabled, everything comes in a single part
-		parts = p.appendPart(parts, stmts)
-	} else {
 		// When tree shaking is enabled, each top-level statement is potentially a separate part
-		for _, stmt := range stmts {
-			switch s := stmt.Data.(type) {
-			case *ast.SLocal:
-				// Split up top-level multi-declaration variable statements
-				for _, decl := range s.Decls {
-					clone := *s
-					clone.Decls = []ast.Decl{decl}
-					parts = p.appendPart(parts, []ast.Stmt{{Loc: stmt.Loc, Data: &clone}})
-				}
+		// for _, stmt := range stmts {
+		// 	switch s := stmt.Data.(type) {
+		// 	case *ast.SLocal:
+		// 		// Split up top-level multi-declaration variable statements
+		// 		for _, decl := range s.Decls {
+		// 			clone := *s
+		// 			clone.Decls = []ast.Decl{decl}
+		// 			parts = p.appendPart(parts, []ast.Stmt{{Loc: stmt.Loc, Data: &clone}})
+		// 		}
 
-			case *ast.SImport, *ast.SExportFrom, *ast.SExportStar:
-				if p.options.mode != config.ModePassThrough {
-					// Move imports (and import-like exports) to the top of the file to
-					// ensure that if they are converted to a require() call, the effects
-					// will take place before any other statements are evaluated.
-					before = p.appendPart(before, []ast.Stmt{stmt})
-				} else {
-					// If we aren't doing any format conversion, just keep these statements
-					// inline where they were. Exports are sorted so order doesn't matter:
-					// https://262.ecma-international.org/6.0/#sec-module-namespace-exotic-objects.
-					// However, this is likely an aesthetic issue that some people will
-					// complain about. In addition, there are code transformation tools
-					// such as TypeScript and Babel with bugs where the order of exports
-					// in the file is incorrectly preserved instead of sorted, so preserving
-					// the order of exports ourselves here may be preferable.
-					parts = p.appendPart(parts, []ast.Stmt{stmt})
-				}
+		// 	case *ast.SImport, *ast.SExportFrom, *ast.SExportStar:
+		// 		if p.options.mode != config.ModePassThrough {
+		// 			// Move imports (and import-like exports) to the top of the file to
+		// 			// ensure that if they are converted to a require() call, the effects
+		// 			// will take place before any other statements are evaluated.
+		// 			before = p.appendPart(before, []ast.Stmt{stmt})
+		// 		} else {
+		// 			// If we aren't doing any format conversion, just keep these statements
+		// 			// inline where they were. Exports are sorted so order doesn't matter:
+		// 			// https://262.ecma-international.org/6.0/#sec-module-namespace-exotic-objects.
+		// 			// However, this is likely an aesthetic issue that some people will
+		// 			// complain about. In addition, there are code transformation tools
+		// 			// such as TypeScript and Babel with bugs where the order of exports
+		// 			// in the file is incorrectly preserved instead of sorted, so preserving
+		// 			// the order of exports ourselves here may be preferable.
+		// 			parts = p.appendPart(parts, []ast.Stmt{stmt})
+		// 		}
 
-			case *ast.SExportEquals:
-				// TypeScript "export = value;" becomes "module.exports = value;". This
-				// must happen at the end after everything is parsed because TypeScript
-				// moves this statement to the end when it generates code.
-				after = p.appendPart(after, []ast.Stmt{stmt})
+		// 	case *ast.SExportEquals:
+		// 		// TypeScript "export = value;" becomes "module.exports = value;". This
+		// 		// must happen at the end after everything is parsed because TypeScript
+		// 		// moves this statement to the end when it generates code.
+		// 		after = p.appendPart(after, []ast.Stmt{stmt})
 
-			default:
-				parts = p.appendPart(parts, []ast.Stmt{stmt})
-			}
-		}
-	}
+		// 	default:
+		// 		parts = p.appendPart(parts, []ast.Stmt{stmt})
+		// 	}
+		// }
 
 	// Insert a variable for "import.meta" at the top of the file if it was used.
 	// We don't need to worry about "use strict" directives because this only
 	// happens when bundling, in which case we are flatting the module scopes of
 	// all modules together anyway so such directives are meaningless.
-	if p.importMetaRef != ast.InvalidRef {
-		importMetaStmt := ast.Stmt{Data: &ast.SLocal{
-			Kind: p.selectLocalKind(ast.LocalConst),
-			Decls: []ast.Decl{{
-				Binding:    ast.Binding{Data: &ast.BIdentifier{Ref: p.importMetaRef}},
-				ValueOrNil: ast.Expr{Data: &ast.EObject{}},
-			}},
-		}}
-		before = append(before, ast.Part{
-			Stmts:                []ast.Stmt{importMetaStmt},
-			SymbolUses:           make(map[ast.Ref]ast.SymbolUse),
-			DeclaredSymbols:      []ast.DeclaredSymbol{{Ref: p.importMetaRef, IsTopLevel: true}},
-			CanBeRemovedIfUnused: true,
-		})
-	}
+	// if p.importMetaRef != ast.InvalidRef {
+	// 	importMetaStmt := ast.Stmt{Data: &ast.SLocal{
+	// 		Kind: p.selectLocalKind(ast.LocalConst),
+	// 		Decls: []ast.Decl{{
+	// 			Binding:    ast.Binding{Data: &ast.BIdentifier{Ref: p.importMetaRef}},
+	// 			ValueOrNil: ast.Expr{Data: &ast.EObject{}},
+	// 		}},
+	// 	}}
+	// 	before = append(before, ast.Part{
+	// 		Stmts:                []ast.Stmt{importMetaStmt},
+	// 		SymbolUses:           make(map[ast.Ref]ast.SymbolUse),
+	// 		DeclaredSymbols:      []ast.DeclaredSymbol{{Ref: p.importMetaRef, IsTopLevel: true}},
+	// 		CanBeRemovedIfUnused: true,
+	// 	})
+	// }
 
 	// Pop the module scope to apply the "ContainsDirectEval" rules
 	p.popScope()
@@ -14626,11 +14713,11 @@ func Parse(log location.Log, source location.Source) (result ast.AST, ok bool) {
 	return
 }
 
-func LazyExportAST(log location.Log, source location.Source, options Options, expr ast.Expr, apiCall string) ast.AST {
+func LazyExportAST(source location.Source, options Options, expr ast.Expr, apiCall string) ast.AST {
 	// Don't create a new lexer using lexer.NewLexer() here since that will
 	// actually attempt to parse the first token, which might cause a syntax
 	// error.
-	p := newParser(log, source, lexer.Lexer{}, &options)
+	p := newParser(source, lexer.Lexer{}, &options)
 	p.prepareForVisitPass()
 
 	// Optionally call a runtime API function to transform the expression
