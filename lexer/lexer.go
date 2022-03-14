@@ -21,7 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mmmommm/dropts/ast"
-	"github.com/mmmommm/dropts/v1/location"
+	"github.com/mmmommm/dropts/location"
 )
 
 func RemoveMultiLineCommentIndent(prefix string, text string) string {

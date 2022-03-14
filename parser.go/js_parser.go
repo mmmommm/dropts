@@ -12,10 +12,11 @@ import (
 	"github.com/mmmommm/dropts/ast"
 	"github.com/mmmommm/dropts/compat"
 	"github.com/mmmommm/dropts/config"
-	"github.com/mmmommm/dropts/v1/lexer"
-	"github.com/mmmommm/dropts/v1/location"
+	"github.com/mmmommm/dropts/lexer"
+	"github.com/mmmommm/dropts/location"
 )
 
+// hash値の計算
 func HashCombine(seed uint32, hash uint32) uint32 {
 	return seed ^ (hash + 0x9e3779b9 + (seed << 6) + (seed >> 2))
 }

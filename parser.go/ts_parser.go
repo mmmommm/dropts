@@ -8,10 +8,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mmmommm/dropts/compat"
 	"github.com/mmmommm/dropts/ast"
 	"github.com/mmmommm/dropts/lexer"
-	"github.com/mmmommm/dropts/logger"
+	"github.com/mmmommm/dropts/location"
 )
 
 func (p *parser) skipTypeScriptBinding() {
@@ -206,12 +205,12 @@ func (p *parser) skipTypeScriptTypeWithOpts(level ast.L, opts skipTypeOpts) {
 			p.lexer.Next()
 
 		case lexer.TConst:
-			r := p.lexer.Range()
+			//r := p.lexer.Range()
 			p.lexer.Next()
 
 			// "[const: number]"
 			if opts.allowTupleLabels && p.lexer.Token == lexer.TColon {
-				p.log.Add(logger.Error, &p.tracker, r, "Unexpected \"const\"")
+				fmt.Print("Unexpected \"const\"")
 			}
 
 		case lexer.TThis:
@@ -396,7 +395,7 @@ func (p *parser) skipTypeScriptTypeWithOpts(level ast.L, opts skipTypeOpts) {
 			// "[function: number]"
 			if opts.allowTupleLabels && p.lexer.IsIdentifierOrKeyword() {
 				if p.lexer.Token != lexer.TFunction {
-					p.log.Add(logger.Error, &p.tracker, p.lexer.Range(), fmt.Sprintf("Unexpected %q", p.lexer.Raw()))
+					fmt.Sprintf("Unexpected %q", p.lexer.Raw())
 				}
 				p.lexer.Next()
 				if p.lexer.Token != lexer.TColon {
@@ -873,25 +872,25 @@ func (p *parser) skipTypeScriptTypeStmt(opts parseStmtOpts) {
 
 func (p *parser) parseTypeScriptDecorators() []ast.Expr {
 	var tsDecorators []ast.Expr
-	if p.options.ts.Parse {
-		for p.lexer.Token == lexer.TAt {
-			p.lexer.Next()
+	// if p.options.ts.Parse {
+	// 	for p.lexer.Token == lexer.TAt {
+	// 		p.lexer.Next()
 
-			// Parse a new/call expression with "exprFlagTSDecorator" so we ignore
-			// EIndex expressions, since they may be part of a computed property:
-			//
-			//   class Foo {
-			//     @foo ['computed']() {}
-			//   }
-			//
-			// This matches the behavior of the TypeScript compiler.
-			tsDecorators = append(tsDecorators, p.parseExprWithFlags(ast.LNew, exprFlagTSDecorator))
-		}
-	}
+	// 		// Parse a new/call expression with "exprFlagTSDecorator" so we ignore
+	// 		// EIndex expressions, since they may be part of a computed property:
+	// 		//
+	// 		//   class Foo {
+	// 		//     @foo ['computed']() {}
+	// 		//   }
+	// 		//
+	// 		// This matches the behavior of the TypeScript compiler.
+	// 		tsDecorators = append(tsDecorators, p.parseExprWithFlags(ast.LNew, exprFlagTSDecorator))
+	// 	}
+	// }
 	return tsDecorators
 }
 
-func (p *parser) parseTypeScriptEnumStmt(loc logger.Loc, opts parseStmtOpts) ast.Stmt {
+func (p *parser) parseTypeScriptEnumStmt(loc location.Loc, opts parseStmtOpts) ast.Stmt {
 	p.lexer.Expect(lexer.TEnum)
 	nameLoc := p.lexer.Loc()
 	nameText := p.lexer.Identifier
@@ -923,7 +922,7 @@ func (p *parser) parseTypeScriptEnumStmt(loc logger.Loc, opts parseStmtOpts) ast
 	oldFnOrArrowData := p.fnOrArrowDataParse
 	p.fnOrArrowDataParse = fnOrArrowDataParse{
 		isThisDisallowed: true,
-		needsAsyncLoc:    logger.Loc{Start: -1},
+		needsAsyncLoc:    location.Loc{Start: -1},
 	}
 
 	// Parse the body
@@ -1037,7 +1036,7 @@ func (p *parser) parseTypeScriptEnumStmt(loc logger.Loc, opts parseStmtOpts) ast
 }
 
 // This assumes the caller has already parsed the "import" token
-func (p *parser) parseTypeScriptImportEqualsStmt(loc logger.Loc, opts parseStmtOpts, defaultNameLoc logger.Loc, defaultName string) ast.Stmt {
+func (p *parser) parseTypeScriptImportEqualsStmt(loc location.Loc, opts parseStmtOpts, defaultNameLoc location.Loc, defaultName string) ast.Stmt {
 	p.lexer.Expect(lexer.TEquals)
 
 	kind := p.selectLocalKind(ast.LocalConst)
@@ -1119,7 +1118,7 @@ func (p *parser) getOrCreateExportedNamespaceMembers(name string, isExport bool)
 	return make(ast.TSNamespaceMembers)
 }
 
-func (p *parser) parseTypeScriptNamespaceStmt(loc logger.Loc, opts parseStmtOpts) ast.Stmt {
+func (p *parser) parseTypeScriptNamespaceStmt(loc location.Loc, opts parseStmtOpts) ast.Stmt {
 	// "namespace Foo {}"
 	nameLoc := p.lexer.Loc()
 	nameText := p.lexer.Identifier
@@ -1146,7 +1145,7 @@ func (p *parser) parseTypeScriptNamespaceStmt(loc logger.Loc, opts parseStmtOpts
 	p.fnOrArrowDataParse = fnOrArrowDataParse{
 		isThisDisallowed:   true,
 		isReturnDisallowed: true,
-		needsAsyncLoc:      logger.Loc{Start: -1},
+		needsAsyncLoc:      location.Loc{Start: -1},
 	}
 
 	// Parse the statements inside the namespace
@@ -1345,7 +1344,7 @@ func (p *parser) exportBindingInsideNamespace(exportedMembers ast.TSNamespaceMem
 }
 
 func (p *parser) generateClosureForTypeScriptNamespaceOrEnum(
-	stmts []ast.Stmt, stmtLoc logger.Loc, isExport bool, nameLoc logger.Loc,
+	stmts []ast.Stmt, stmtLoc location.Loc, isExport bool, nameLoc location.Loc,
 	nameRef ast.Ref, argRef ast.Ref, stmtsInsideClosure []ast.Stmt,
 ) []ast.Stmt {
 	// Follow the link chain in case symbols were merged
@@ -1419,17 +1418,17 @@ func (p *parser) generateClosureForTypeScriptNamespaceOrEnum(
 	// Try to use an arrow function if possible for compactness
 	var targetExpr ast.Expr
 	args := []ast.Arg{{Binding: ast.Binding{Loc: nameLoc, Data: &ast.BIdentifier{Ref: argRef}}}}
-	if p.options.unsupportedJSFeatures.Has(compat.Arrow) {
-		targetExpr = ast.Expr{Loc: stmtLoc, Data: &ast.EFunction{Fn: ast.Fn{
-			Args: args,
-			Body: ast.FnBody{Loc: stmtLoc, Stmts: stmtsInsideClosure},
-		}}}
-	} else {
+	// if p.options.unsupportedJSFeatures.Has(compat.Arrow) {
+	// 	targetExpr = ast.Expr{Loc: stmtLoc, Data: &ast.EFunction{Fn: ast.Fn{
+	// 		Args: args,
+	// 		Body: ast.FnBody{Loc: stmtLoc, Stmts: stmtsInsideClosure},
+	// 	}}}
+	// } else {
 		targetExpr = ast.Expr{Loc: stmtLoc, Data: &ast.EArrow{
 			Args: args,
 			Body: ast.FnBody{Loc: stmtLoc, Stmts: stmtsInsideClosure},
 		}}
-	}
+	//}
 
 	// Call the closure with the name object
 	stmts = append(stmts, ast.Stmt{Loc: stmtLoc, Data: &ast.SExpr{Value: ast.Expr{Loc: stmtLoc, Data: &ast.ECall{
@@ -1441,7 +1440,7 @@ func (p *parser) generateClosureForTypeScriptNamespaceOrEnum(
 }
 
 func (p *parser) generateClosureForTypeScriptEnum(
-	stmts []ast.Stmt, stmtLoc logger.Loc, isExport bool, nameLoc logger.Loc,
+	stmts []ast.Stmt, stmtLoc location.Loc, isExport bool, nameLoc location.Loc,
 	nameRef ast.Ref, argRef ast.Ref, exprsInsideClosure []ast.Expr,
 	allValuesArePure bool,
 ) []ast.Stmt {
@@ -1453,15 +1452,15 @@ func (p *parser) generateClosureForTypeScriptEnum(
 	if p.currentScope != p.moduleScope {
 		stmtsInsideClosure := []ast.Stmt{}
 		if len(exprsInsideClosure) > 0 {
-			if p.options.mangleSyntax {
-				// "a; b; c;" => "a, b, c;"
-				joined := ast.JoinAllWithComma(exprsInsideClosure)
-				stmtsInsideClosure = append(stmtsInsideClosure, ast.Stmt{Loc: joined.Loc, Data: &ast.SExpr{Value: joined}})
-			} else {
+			// if p.options.mangleSyntax {
+			// 	// "a; b; c;" => "a, b, c;"
+			// 	joined := ast.JoinAllWithComma(exprsInsideClosure)
+			// 	stmtsInsideClosure = append(stmtsInsideClosure, ast.Stmt{Loc: joined.Loc, Data: &ast.SExpr{Value: joined}})
+			// } else {
 				for _, expr := range exprsInsideClosure {
 					stmtsInsideClosure = append(stmtsInsideClosure, ast.Stmt{Loc: expr.Loc, Data: &ast.SExpr{Value: expr}})
 				}
-			}
+			//}
 		}
 		return p.generateClosureForTypeScriptNamespaceOrEnum(
 			stmts, stmtLoc, isExport, nameLoc, nameRef, argRef, stmtsInsideClosure)
@@ -1508,34 +1507,34 @@ func (p *parser) generateClosureForTypeScriptEnum(
 	stmtsInsideClosure := []ast.Stmt{}
 	if len(exprsInsideClosure) > 0 {
 		argExpr := ast.Expr{Loc: nameLoc, Data: &ast.EIdentifier{Ref: argRef}}
-		if p.options.mangleSyntax {
-			// "a; b; return c;" => "return a, b, c;"
-			joined := ast.JoinAllWithComma(exprsInsideClosure)
-			joined = ast.JoinWithComma(joined, argExpr)
-			stmtsInsideClosure = append(stmtsInsideClosure, ast.Stmt{Loc: joined.Loc, Data: &ast.SReturn{ValueOrNil: joined}})
-		} else {
+		// if p.options.mangleSyntax {
+		// 	// "a; b; return c;" => "return a, b, c;"
+		// 	joined := ast.JoinAllWithComma(exprsInsideClosure)
+		// 	joined = ast.JoinWithComma(joined, argExpr)
+		// 	stmtsInsideClosure = append(stmtsInsideClosure, ast.Stmt{Loc: joined.Loc, Data: &ast.SReturn{ValueOrNil: joined}})
+		// } else {
 			for _, expr := range exprsInsideClosure {
 				stmtsInsideClosure = append(stmtsInsideClosure, ast.Stmt{Loc: expr.Loc, Data: &ast.SExpr{Value: expr}})
 			}
 			stmtsInsideClosure = append(stmtsInsideClosure, ast.Stmt{Loc: argExpr.Loc, Data: &ast.SReturn{ValueOrNil: argExpr}})
-		}
+		//}
 	}
 
 	// Try to use an arrow function if possible for compactness
 	var targetExpr ast.Expr
 	args := []ast.Arg{{Binding: ast.Binding{Loc: nameLoc, Data: &ast.BIdentifier{Ref: argRef}}}}
-	if p.options.unsupportedJSFeatures.Has(compat.Arrow) {
-		targetExpr = ast.Expr{Loc: stmtLoc, Data: &ast.EFunction{Fn: ast.Fn{
-			Args: args,
-			Body: ast.FnBody{Loc: stmtLoc, Stmts: stmtsInsideClosure},
-		}}}
-	} else {
+	// if p.options.unsupportedJSFeatures.Has(compat.Arrow) {
+	// 	targetExpr = ast.Expr{Loc: stmtLoc, Data: &ast.EFunction{Fn: ast.Fn{
+	// 		Args: args,
+	// 		Body: ast.FnBody{Loc: stmtLoc, Stmts: stmtsInsideClosure},
+	// 	}}}
+	// } else {
 		targetExpr = ast.Expr{Loc: stmtLoc, Data: &ast.EArrow{
 			Args:       args,
 			Body:       ast.FnBody{Loc: stmtLoc, Stmts: stmtsInsideClosure},
-			PreferExpr: p.options.mangleSyntax,
+			//PreferExpr: p.options.mangleSyntax,
 		}}
-	}
+	//}
 
 	// Call the closure with the name object and store it to the variable
 	decls := []ast.Decl{{
@@ -1564,7 +1563,7 @@ func (p *parser) generateClosureForTypeScriptEnum(
 }
 
 func (p *parser) wrapInlinedEnum(value ast.Expr, comment string) ast.Expr {
-	if p.shouldFoldNumericConstants || p.options.mangleSyntax || strings.Contains(comment, "*/") {
+	if p.shouldFoldNumericConstants || strings.Contains(comment, "*/") {
 		// Don't wrap with a comment
 		return value
 	}

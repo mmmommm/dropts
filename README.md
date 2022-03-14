@@ -38,3 +38,15 @@ input ~~Lexer~~> Tokens ~~Parser~~> AST ~~Compiler~~> Javascript
 オプションはつけないあくまでAPIに文字列として渡されたTypescriptコードを変換することだけする
 
 `parser.Parse` の内部で `newLexer` を読んでいるので `parser.Parse` にstringでtypescriptコードを渡す
+
+## sample code
+
+```ts
+const x: number = 1;
+function square(x: number): number {
+  return x ** 2;
+}
+```
+
+## run
+`go run main.go const x:number=1;`

@@ -5,7 +5,7 @@ import (
 	"sort"
 
 	"github.com/mmmommm/dropts/compat"
-	"github.com/mmmommm/dropts/logger"
+	"github.com/mmmommm/dropts/location"
 )
 
 type ImportKind uint8
@@ -62,8 +62,8 @@ func (kind ImportKind) IsFromCSS() bool {
 }
 
 type ImportRecord struct {
-	Range      logger.Range
-	Path       logger.Path
+	Range      location.Range
+	//Path       location.Path
 	Assertions *[]AssertEntry
 
 	// The resolved source index for an internal import (within the bundle) or
@@ -118,8 +118,8 @@ type ImportRecord struct {
 type AssertEntry struct {
 	Key             []uint16 // An identifier or a string
 	Value           []uint16 // Always a string
-	KeyLoc          logger.Loc
-	ValueLoc        logger.Loc
+	KeyLoc          location.Loc
+	ValueLoc        location.Loc
 	PreferQuotedKey bool
 }
 
@@ -378,12 +378,12 @@ var OpTable = []opTableEntry{
 }
 
 type LocRef struct {
-	Loc logger.Loc
+	Loc location.Loc
 	Ref Ref
 }
 
 type Comment struct {
-	Loc  logger.Loc
+	Loc  location.Loc
 	Text string
 }
 
@@ -399,7 +399,7 @@ const (
 )
 
 type ClassStaticBlock struct {
-	Loc   logger.Loc
+	Loc   location.Loc
 	Stmts []Stmt
 }
 
@@ -451,7 +451,7 @@ type Arg struct {
 
 type Fn struct {
 	Name         *LocRef
-	OpenParenLoc logger.Loc
+	OpenParenLoc location.Loc
 	Args         []Arg
 	Body         FnBody
 	ArgumentsRef Ref
@@ -466,16 +466,16 @@ type Fn struct {
 }
 
 type FnBody struct {
-	Loc   logger.Loc
+	Loc   location.Loc
 	Stmts []Stmt
 }
 
 type Class struct {
-	ClassKeyword logger.Range
+	ClassKeyword location.Range
 	TSDecorators []Expr
 	Name         *LocRef
 	ExtendsOrNil Expr
-	BodyLoc      logger.Loc
+	BodyLoc      location.Loc
 	Properties   []Property
 }
 
@@ -485,7 +485,7 @@ type ArrayBinding struct {
 }
 
 type Binding struct {
-	Loc  logger.Loc
+	Loc  location.Loc
 	Data B
 }
 
@@ -514,7 +514,7 @@ type BObject struct {
 }
 
 type Expr struct {
-	Loc  logger.Loc
+	Loc  location.Loc
 	Data E
 }
 
@@ -562,7 +562,7 @@ func (*EImportCall) isExpr()           {}
 
 type EArray struct {
 	Items            []Expr
-	CommaAfterSpread logger.Loc
+	CommaAfterSpread location.Loc
 	IsSingleLine     bool
 	IsParenthesized  bool
 }
@@ -591,7 +591,7 @@ type EUndefined struct{}
 type EThis struct{}
 
 type ENewTarget struct {
-	Range logger.Range
+	Range location.Range
 }
 
 type EImportMeta struct {
@@ -655,7 +655,7 @@ func (a *ECall) HasSameFlagsAs(b *ECall) bool {
 type EDot struct {
 	Target        Expr
 	Name          string
-	NameLoc       logger.Loc
+	NameLoc       location.Loc
 	OptionalChain OptionalChain
 
 	// If true, this property access is known to be free of side-effects. That
@@ -757,7 +757,7 @@ type EJSXElement struct {
 	TagOrNil   Expr
 	Properties []Property
 	Children   []Expr
-	CloseLoc   logger.Loc
+	CloseLoc   location.Loc
 }
 
 type ENumber struct{ Value float64 }
@@ -766,7 +766,7 @@ type EBigInt struct{ Value string }
 
 type EObject struct {
 	Properties       []Property
-	CommaAfterSpread logger.Loc
+	CommaAfterSpread location.Loc
 	IsSingleLine     bool
 	IsParenthesized  bool
 }
@@ -777,24 +777,24 @@ type ESpread struct{ Value Expr }
 // the number of cases that need to be checked for string optimization code
 type EString struct {
 	Value          []uint16
-	LegacyOctalLoc logger.Loc
+	LegacyOctalLoc location.Loc
 	PreferTemplate bool
 }
 
 type TemplatePart struct {
 	Value      Expr
-	TailLoc    logger.Loc
+	TailLoc    location.Loc
 	TailCooked []uint16 // Only use when "TagOrNil" is nil
 	TailRaw    string   // Only use when "TagOrNil" is not nil
 }
 
 type ETemplate struct {
 	TagOrNil       Expr
-	HeadLoc        logger.Loc
+	HeadLoc        location.Loc
 	HeadCooked     []uint16 // Only use when "TagOrNil" is nil
 	HeadRaw        string   // Only use when "TagOrNil" is not nil
 	Parts          []TemplatePart
-	LegacyOctalLoc logger.Loc
+	LegacyOctalLoc location.Loc
 }
 
 type ERegExp struct{ Value string }
@@ -1150,7 +1150,7 @@ func JoinAllWithComma(all []Expr) (result Expr) {
 }
 
 type Stmt struct {
-	Loc  logger.Loc
+	Loc  location.Loc
 	Data S
 }
 
@@ -1210,7 +1210,7 @@ type SDebugger struct{}
 
 type SDirective struct {
 	Value          []uint16
-	LegacyOctalLoc logger.Loc
+	LegacyOctalLoc location.Loc
 }
 
 type SExportClause struct {
@@ -1231,7 +1231,7 @@ type SExportDefault struct {
 }
 
 type ExportStarAlias struct {
-	Loc logger.Loc
+	Loc location.Loc
 
 	// Although this alias name starts off as being the same as the statement's
 	// namespace symbol, it may diverge if the namespace symbol name is minified.
@@ -1269,7 +1269,7 @@ type EnumValue struct {
 	Name       []uint16
 	ValueOrNil Expr
 	Ref        Ref
-	Loc        logger.Loc
+	Loc        location.Loc
 }
 
 type SEnum struct {
@@ -1339,24 +1339,24 @@ type SWhile struct {
 
 type SWith struct {
 	Value   Expr
-	BodyLoc logger.Loc
+	BodyLoc location.Loc
 	Body    Stmt
 }
 
 type Catch struct {
 	BindingOrNil Binding
 	Body         []Stmt
-	Loc          logger.Loc
-	BodyLoc      logger.Loc
+	Loc          location.Loc
+	BodyLoc      location.Loc
 }
 
 type Finally struct {
-	Loc   logger.Loc
+	Loc   location.Loc
 	Stmts []Stmt
 }
 
 type STry struct {
-	BodyLoc logger.Loc
+	BodyLoc location.Loc
 	Body    []Stmt
 	Catch   *Catch
 	Finally *Finally
@@ -1369,7 +1369,7 @@ type Case struct {
 
 type SSwitch struct {
 	Test    Expr
-	BodyLoc logger.Loc
+	BodyLoc location.Loc
 	Cases   []Case
 }
 
@@ -1394,7 +1394,7 @@ type SImport struct {
 
 	DefaultName       *LocRef
 	Items             *[]ClauseItem
-	StarNameLoc       *logger.Loc
+	StarNameLoc       *location.Loc
 	ImportRecordIndex uint32
 	IsSingleLine      bool
 }
@@ -1446,7 +1446,7 @@ func IsSuperCall(stmt Stmt) bool {
 
 type ClauseItem struct {
 	Alias    string
-	AliasLoc logger.Loc
+	AliasLoc location.Loc
 	Name     LocRef
 
 	// This is the original name of the symbol stored in "Name". It's needed for
@@ -1826,7 +1826,7 @@ func (kind ScopeKind) StopsHoisting() bool {
 
 type ScopeMember struct {
 	Ref Ref
-	Loc logger.Loc
+	Loc location.Loc
 }
 
 type Scope struct {
@@ -1840,7 +1840,7 @@ type Scope struct {
 	TSNamespace *TSNamespaceScope
 
 	// The location of the "use strict" directive for ExplicitStrictMode
-	UseStrictLoc logger.Loc
+	UseStrictLoc location.Loc
 
 	// This is used to store the ref of the label symbol for ScopeLabel scopes.
 	Label           LocRef
@@ -1983,7 +1983,7 @@ type TSNamespaceMembers map[string]TSNamespaceMember
 
 type TSNamespaceMember struct {
 	Data        TSNamespaceMemberData
-	Loc         logger.Loc
+	Loc         location.Loc
 	IsEnumValue bool
 }
 
@@ -2102,9 +2102,9 @@ type AST struct {
 
 	// This is a list of ES6 features. They are ranges instead of booleans so
 	// that they can be used in log messages. Check to see if "Len > 0".
-	ImportKeyword        logger.Range // Does not include TypeScript-specific syntax or "import()"
-	ExportKeyword        logger.Range // Does not include TypeScript-specific syntax
-	TopLevelAwaitKeyword logger.Range
+	ImportKeyword        location.Range // Does not include TypeScript-specific syntax or "import()"
+	ExportKeyword        location.Range // Does not include TypeScript-specific syntax
+	TopLevelAwaitKeyword location.Range
 
 	Hashbang    string
 	Directive   string
@@ -2138,7 +2138,7 @@ type AST struct {
 	// call "TopLevelSymbolToParts" instead.
 	TopLevelSymbolToPartsFromParser map[Ref][]uint32
 
-	SourceMapComment logger.Span
+	SourceMapComment location.Span
 }
 
 type TSEnumValue struct {
@@ -2249,7 +2249,7 @@ type NamedImport struct {
 	LocalPartsWithUses []uint32
 
 	Alias             string
-	AliasLoc          logger.Loc
+	AliasLoc          location.Loc
 	NamespaceRef      Ref
 	ImportRecordIndex uint32
 
@@ -2266,7 +2266,7 @@ type NamedImport struct {
 
 type NamedExport struct {
 	Ref      Ref
-	AliasLoc logger.Loc
+	AliasLoc location.Loc
 }
 
 // Each file is made up of multiple parts, and each part consists of one or
@@ -2397,23 +2397,23 @@ func MergeSymbols(symbols SymbolMap, old Ref, new Ref) Ref {
 // the code as far as avoiding symbol name collisions. These names still go
 // through the renaming logic that all other symbols go through to avoid name
 // collisions.
-func GenerateNonUniqueNameFromPath(path string) string {
-	// Get the file name without the extension
-	dir, base, _ := logger.PlatformIndependentPathDirBaseExt(path)
+// func GenerateNonUniqueNameFromPath(path string) string {
+// 	// Get the file name without the extension
+// 	dir, base, _ := location.PlatformIndependentPathDirBaseExt(path)
 
-	// If the name is "index", use the directory name instead. This is because
-	// many packages in npm use the file name "index.js" because it triggers
-	// node's implicit module resolution rules that allows you to import it by
-	// just naming the directory.
-	if base == "index" {
-		_, dirBase, _ := logger.PlatformIndependentPathDirBaseExt(dir)
-		if dirBase != "" {
-			base = dirBase
-		}
-	}
+// 	// If the name is "index", use the directory name instead. This is because
+// 	// many packages in npm use the file name "index.js" because it triggers
+// 	// node's implicit module resolution rules that allows you to import it by
+// 	// just naming the directory.
+// 	if base == "index" {
+// 		_, dirBase, _ := location.PlatformIndependentPathDirBaseExt(dir)
+// 		if dirBase != "" {
+// 			base = dirBase
+// 		}
+// 	}
 
-	return EnsureValidIdentifier(base)
-}
+// 	return EnsureValidIdentifier(base)
+// }
 
 func EnsureValidIdentifier(base string) string {
 	// Convert it to an ASCII identifier. Note: If you change this to a non-ASCII
@@ -2440,7 +2440,7 @@ func EnsureValidIdentifier(base string) string {
 	return string(bytes)
 }
 
-func ConvertBindingToExpr(binding Binding, wrapIdentifier func(logger.Loc, Ref) Expr) Expr {
+func ConvertBindingToExpr(binding Binding, wrapIdentifier func(location.Loc, Ref) Expr) Expr {
 	loc := binding.Loc
 
 	switch b := binding.Data.(type) {
