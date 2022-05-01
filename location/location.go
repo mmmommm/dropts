@@ -167,3 +167,31 @@ func (s *Source) RangeOfLegacyOctalEscape(loc Loc) (r Range) {
 	}
 	return
 }
+
+func PlatformIndependentPathDirBaseExt(path string) (dir string, base string, ext string) {
+	for {
+		i := strings.LastIndexAny(path, "/\\")
+
+		// Stop if there are no more slashes
+		if i < 0 {
+			base = path
+			break
+		}
+
+		// Stop if we found a non-trailing slash
+		if i+1 != len(path) {
+			dir, base = path[:i], path[i+1:]
+			break
+		}
+
+		// Ignore trailing slashes
+		path = path[:i]
+	}
+
+	// Strip off the extension
+	if dot := strings.LastIndexByte(base, '.'); dot >= 0 {
+		base, ext = base[:dot], base[dot:]
+	}
+
+	return
+}

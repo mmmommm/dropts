@@ -2494,3 +2494,21 @@ func ConvertBindingToExpr(binding Binding, wrapIdentifier func(location.Loc, Ref
 		panic("Internal error")
 	}
 }
+
+func GenerateNonUniqueNameFromPath(path string) string {
+	// Get the file name without the extension
+	dir, base, _ := location.PlatformIndependentPathDirBaseExt(path)
+
+	// If the name is "index", use the directory name instead. This is because
+	// many packages in npm use the file name "index.js" because it triggers
+	// node's implicit module resolution rules that allows you to import it by
+	// just naming the directory.
+	if base == "index" {
+		_, dirBase, _ := location.PlatformIndependentPathDirBaseExt(dir)
+		if dirBase != "" {
+			base = dirBase
+		}
+	}
+
+	return EnsureValidIdentifier(base)
+}

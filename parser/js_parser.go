@@ -15,11 +15,758 @@ import (
 	"github.com/mmmommm/dropts/lexer"
 	"github.com/mmmommm/dropts/location"
 )
-func (p *parser) markSyntaxFeature(feature compat.JSFeature, r logger.Range) (didGenerateError bool) {
+
+func (p *parser) lowerClass(stmt ast.Stmt, expr ast.Expr, result visitClassResult) ([]ast.Stmt, ast.Expr) {
+	type classKind uint8
+	const (
+		classKindExpr classKind = iota
+		classKindStmt
+		classKindExportStmt
+		classKindExportDefaultStmt
+	)
+
+	// Unpack the class from the statement or expression
+	var kind classKind
+	var class *ast.Class
+	var classLoc location.Loc
+	var defaultName ast.LocRef
+	var nameToKeep string
+	if stmt.Data == nil {
+		e, _ := expr.Data.(*ast.EClass)
+		class = &e.Class
+		kind = classKindExpr
+		if class.Name != nil {
+			symbol := &p.symbols[class.Name.Ref.InnerIndex]
+			nameToKeep = symbol.OriginalName
+
+			// The shadowing name inside the class expression should be the same as
+			// the class expression name itself
+			if result.shadowRef != ast.InvalidRef {
+				p.mergeSymbols(result.shadowRef, class.Name.Ref)
+			}
+
+			// Remove unused class names when minifying. Check this after we merge in
+			// the shadowing name above since that will adjust the use count.
+		}
+	} else if s, ok := stmt.Data.(*ast.SClass); ok {
+		class = &s.Class
+		if s.IsExport {
+			kind = classKindExportStmt
+		} else {
+			kind = classKindStmt
+		}
+		nameToKeep = p.symbols[class.Name.Ref.InnerIndex].OriginalName
+	} else {
+		s, _ := stmt.Data.(*ast.SExportDefault)
+		s2, _ := s.Value.Data.(*ast.SClass)
+		class = &s2.Class
+		defaultName = s.DefaultName
+		kind = classKindExportDefaultStmt
+		if class.Name != nil {
+			nameToKeep = p.symbols[class.Name.Ref.InnerIndex].OriginalName
+		} else {
+			nameToKeep = "default"
+		}
+	}
+	if stmt.Data == nil {
+		classLoc = expr.Loc
+	} else {
+		classLoc = stmt.Loc
+	}
+
+	var ctor *ast.EFunction
+	var parameterFields []ast.Stmt
+	var instanceMembers []ast.Stmt
+	var instancePrivateMethods []ast.Stmt
+	end := 0
+
+	// These expressions are generated after the class body, in this order
+	var computedPropertyCache ast.Expr
+	var privateMembers []ast.Expr
+	var staticMembers []ast.Expr
+	var staticPrivateMethods []ast.Expr
+	var instanceDecorators []ast.Expr
+	var staticDecorators []ast.Expr
+
+	// These are only for class expressions that need to be captured
+	var nameFunc func() ast.Expr
+	var wrapFunc func(ast.Expr) ast.Expr
+	didCaptureClassExpr := false
+
+	// Class statements can be missing a name if they are in an
+	// "export default" statement:
+	//
+	//   export default class {
+	//     static foo = 123
+	//   }
+	//
+	nameFunc = func() ast.Expr {
+		if kind == classKindExpr {
+			// If this is a class expression, capture and store it. We have to
+			// do this even if it has a name since the name isn't exposed
+			// outside the class body.
+			classExpr := &ast.EClass{Class: *class}
+			class = &classExpr.Class
+			nameFunc, wrapFunc = p.captureValueWithPossibleSideEffects(classLoc, 2, ast.Expr{Loc: classLoc, Data: classExpr}, valueDefinitelyNotMutated)
+			expr = nameFunc()
+			didCaptureClassExpr = true
+			name := nameFunc()
+
+			// If we're storing the class expression in a variable, remove the class
+			// name and rewrite all references to the class name with references to
+			// the temporary variable holding the class expression. This ensures that
+			// references to the class expression by name in any expressions that end
+			// up being pulled outside of the class body still work. For example:
+			//
+			//   let Bar = class Foo {
+			//     static foo = 123
+			//     static bar = Foo.foo
+			//   }
+			//
+			// This might be converted into the following:
+			//
+			//   var _a;
+			//   let Bar = (_a = class {
+			//   }, _a.foo = 123, _a.bar = _a.foo, _a);
+			//
+			if class.Name != nil {
+				p.mergeSymbols(class.Name.Ref, name.Data.(*ast.EIdentifier).Ref)
+				class.Name = nil
+			}
+
+			return name
+		} else {
+			if class.Name == nil {
+				if kind == classKindExportDefaultStmt {
+					class.Name = &defaultName
+				} else {
+					class.Name = &ast.LocRef{Loc: classLoc, Ref: p.generateTempRef(tempRefNoDeclare, "")}
+				}
+			}
+			p.recordUsage(class.Name.Ref)
+			return ast.Expr{Loc: classLoc, Data: &ast.EIdentifier{Ref: class.Name.Ref}}
+		}
+	}
+
+	classLoweringInfo := p.computeClassLoweringInfo(class)
+
+	for _, prop := range class.Properties {
+		if prop.Kind == ast.PropertyClassStaticBlock {
+			// if p.options.unsupportedJSFeatures.Has(compat.ClassStaticBlocks) {
+			// 	if block := *prop.ClassStaticBlock; len(block.Block.Stmts) > 0 {
+			// 		staticMembers = append(staticMembers, ast.Expr{Loc: block.Loc, Data: &ast.ECall{
+			// 			Target: ast.Expr{Loc: block.Loc, Data: &js_ast.EArrow{Body: js_ast.FnBody{
+			// 				Block: block.Block,
+			// 			}}},
+			// 		}})
+			// 	}
+			// 	continue
+			// }
+
+			// Keep this property
+			class.Properties[end] = prop
+			end++
+			continue
+		}
+
+		// Merge parameter decorators with method decorators
+		if prop.IsMethod {
+			if fn, ok := prop.ValueOrNil.Data.(*ast.EFunction); ok {
+				isConstructor := false
+				if key, ok := prop.Key.Data.(*ast.EString); ok {
+					isConstructor = helpers.UTF16EqualsString(key.Value, "constructor")
+				}
+				for i, arg := range fn.Fn.Args {
+					for _, decorator := range arg.TSDecorators {
+						// Generate a call to "__decorateParam()" for this parameter decorator
+						var decorators *[]ast.Expr = &prop.TSDecorators
+						if isConstructor {
+							decorators = &class.TSDecorators
+						}
+						*decorators = append(*decorators,
+							p.callRuntime(decorator.Loc, "__decorateParam", []ast.Expr{
+								{Loc: decorator.Loc, Data: &ast.ENumber{Value: float64(i)}},
+								decorator,
+							}),
+						)
+					}
+				}
+			}
+		}
+
+		// The TypeScript class field transform requires removing fields without
+		// initializers. If the field is removed, then we only need the key for
+		// its side effects and we don't need a temporary reference for the key.
+		// However, the TypeScript compiler doesn't remove the field when doing
+		// strict class field initialization, so we shouldn't either.
+		private, _ := prop.Key.Data.(*ast.EPrivateIdentifier)
+		mustLowerPrivate := private != nil && p.privateSymbolNeedsToBeLowered(private)
+		shouldOmitFieldInitializer := !prop.IsMethod && prop.InitializerOrNil.Data == nil &&
+			!classLoweringInfo.useDefineForClassFields && !mustLowerPrivate
+
+		// Class fields must be lowered if the environment doesn't support them
+		mustLowerField := false
+		if !prop.IsMethod {
+			if prop.IsStatic {
+				mustLowerField = classLoweringInfo.lowerAllStaticFields
+			} else {
+				mustLowerField = classLoweringInfo.lowerAllInstanceFields
+			}
+		}
+
+		// If the field uses the TypeScript "declare" keyword, just omit it entirely.
+		// However, we must still keep any side-effects in the computed value and/or
+		// in the decorators.
+		if prop.Kind == ast.PropertyDeclare && prop.ValueOrNil.Data == nil {
+			mustLowerField = true
+			shouldOmitFieldInitializer = true
+		}
+
+		// Make sure the order of computed property keys doesn't change. These
+		// expressions have side effects and must be evaluated in order.
+		keyExprNoSideEffects := prop.Key
+		if prop.IsComputed && (len(prop.TSDecorators) > 0 ||
+			mustLowerField || computedPropertyCache.Data != nil) {
+			needsKey := true
+			if len(prop.TSDecorators) == 0 && (prop.IsMethod || shouldOmitFieldInitializer || !mustLowerField) {
+				needsKey = false
+			}
+
+			if !needsKey {
+				// Just evaluate the key for its side effects
+				computedPropertyCache = ast.JoinWithComma(computedPropertyCache, prop.Key)
+			} else if _, ok := prop.Key.Data.(*ast.EString); !ok {
+				// Store the key in a temporary so we can assign to it later
+				ref := p.generateTempRef(tempRefNeedsDeclare, "")
+				p.recordUsage(ref)
+				computedPropertyCache = ast.JoinWithComma(computedPropertyCache,
+					ast.Assign(ast.Expr{Loc: prop.Key.Loc, Data: &ast.EIdentifier{Ref: ref}}, prop.Key))
+				prop.Key = ast.Expr{Loc: prop.Key.Loc, Data: &ast.EIdentifier{Ref: ref}}
+				keyExprNoSideEffects = prop.Key
+			}
+
+			// If this is a computed method, the property value will be used
+			// immediately. In this case we inline all computed properties so far to
+			// make sure all computed properties before this one are evaluated first.
+			if !mustLowerField {
+				prop.Key = computedPropertyCache
+				computedPropertyCache = ast.Expr{}
+			}
+		}
+
+		// Handle decorators
+			// Generate a single call to "__decorateClass()" for this property
+			if len(prop.TSDecorators) > 0 {
+				loc := prop.Key.Loc
+
+				// Clone the key for the property descriptor
+				var descriptorKey ast.Expr
+				switch k := keyExprNoSideEffects.Data.(type) {
+				case *ast.ENumber:
+					descriptorKey = ast.Expr{Loc: loc, Data: &ast.ENumber{Value: k.Value}}
+				case *ast.EString:
+					descriptorKey = ast.Expr{Loc: loc, Data: &ast.EString{Value: k.Value}}
+				case *ast.EIdentifier:
+					descriptorKey = ast.Expr{Loc: loc, Data: &ast.EIdentifier{Ref: k.Ref}}
+				default:
+					panic("Internal error")
+				}
+
+				// This code tells "__decorateClass()" if the descriptor should be undefined
+				descriptorKind := float64(1)
+				if !prop.IsMethod {
+					descriptorKind = 2
+				}
+
+				// Instance properties use the prototype, static properties use the class
+				var target ast.Expr
+				if prop.IsStatic {
+					target = nameFunc()
+				} else {
+					target = ast.Expr{Loc: loc, Data: &ast.EDot{Target: nameFunc(), Name: "prototype", NameLoc: loc}}
+				}
+
+				decorator := p.callRuntime(loc, "__decorateClass", []ast.Expr{
+					{Loc: loc, Data: &ast.EArray{Items: prop.TSDecorators}},
+					target,
+					descriptorKey,
+					{Loc: loc, Data: &ast.ENumber{Value: descriptorKind}},
+				})
+
+				// Static decorators are grouped after instance decorators
+				if prop.IsStatic {
+					staticDecorators = append(staticDecorators, decorator)
+				} else {
+					instanceDecorators = append(instanceDecorators, decorator)
+				}
+			}
+
+		// Handle lowering of instance and static fields. Move their initializers
+		// from the class body to either the constructor (instance fields) or after
+		// the class (static fields).
+		if !prop.IsMethod && mustLowerField {
+			// The TypeScript compiler doesn't follow the JavaScript spec for
+			// uninitialized fields. They are supposed to be set to undefined but the
+			// TypeScript compiler just omits them entirely.
+			if !shouldOmitFieldInitializer {
+				loc := prop.Key.Loc
+
+				// Determine where to store the field
+				var target ast.Expr
+				if prop.IsStatic {
+					target = nameFunc()
+				} else {
+					target = ast.Expr{Loc: loc, Data: ast.EThisShared}
+				}
+
+				// Generate the assignment initializer
+				var init ast.Expr
+				if prop.InitializerOrNil.Data != nil {
+					init = prop.InitializerOrNil
+				} else {
+					init = ast.Expr{Loc: loc, Data: ast.EUndefinedShared}
+				}
+
+				// Generate the assignment target
+				var memberExpr ast.Expr
+				if mustLowerPrivate {
+					// Generate a new symbol for this private field
+					ref := p.generateTempRef(tempRefNeedsDeclare, "_"+p.symbols[private.Ref.InnerIndex].OriginalName[1:])
+					p.symbols[private.Ref.InnerIndex].Link = ref
+
+					// Initialize the private field to a new WeakMap
+					if p.weakMapRef == ast.InvalidRef {
+						p.weakMapRef = p.newSymbol(ast.SymbolUnbound, "WeakMap")
+						p.moduleScope.Generated = append(p.moduleScope.Generated, p.weakMapRef)
+					}
+					privateMembers = append(privateMembers, ast.Assign(
+						ast.Expr{Loc: loc, Data: &ast.EIdentifier{Ref: ref}},
+						ast.Expr{Loc: loc, Data: &ast.ENew{Target: ast.Expr{Loc: loc, Data: &ast.EIdentifier{Ref: p.weakMapRef}}}},
+					))
+					p.recordUsage(ref)
+
+					// Add every newly-constructed instance into this map
+					memberExpr = p.callRuntime(loc, "__privateAdd", []ast.Expr{
+						target,
+						{Loc: loc, Data: &ast.EIdentifier{Ref: ref}},
+						init,
+					})
+					p.recordUsage(ref)
+				} else if private == nil && classLoweringInfo.useDefineForClassFields {
+					if _, ok := init.Data.(*ast.EUndefined); ok {
+						memberExpr = p.callRuntime(loc, "__publicField", []ast.Expr{target, prop.Key})
+					} else {
+						memberExpr = p.callRuntime(loc, "__publicField", []ast.Expr{target, prop.Key, init})
+					}
+				} else {
+					if key, ok := prop.Key.Data.(*ast.EString); ok && !prop.IsComputed && !prop.PreferQuotedKey {
+						target = ast.Expr{Loc: loc, Data: &ast.EDot{
+							Target:  target,
+							Name:    helpers.UTF16ToString(key.Value),
+							NameLoc: loc,
+						}}
+					} else {
+						target = ast.Expr{Loc: loc, Data: &ast.EIndex{
+							Target: target,
+							Index:  prop.Key,
+						}}
+					}
+
+					memberExpr = ast.Assign(target, init)
+				}
+
+				if prop.IsStatic {
+					// Move this property to an assignment after the class ends
+					staticMembers = append(staticMembers, memberExpr)
+				} else {
+					// Move this property to an assignment inside the class constructor
+					instanceMembers = append(instanceMembers, ast.Stmt{Loc: loc, Data: &ast.SExpr{Value: memberExpr}})
+				}
+			}
+
+			if private == nil || mustLowerPrivate {
+				// Remove the field from the class body
+				continue
+			}
+
+			// Keep the private field but remove the initializer
+			prop.InitializerOrNil = ast.Expr{}
+		}
+
+		if prop.IsMethod {
+			if mustLowerPrivate {
+				loc := prop.Key.Loc
+
+				// Don't generate a symbol for a getter/setter pair twice
+				if p.symbols[private.Ref.InnerIndex].Link == ast.InvalidRef {
+					// Generate a new symbol for this private method
+					ref := p.generateTempRef(tempRefNeedsDeclare, "_"+p.symbols[private.Ref.InnerIndex].OriginalName[1:])
+					p.symbols[private.Ref.InnerIndex].Link = ref
+
+					// Initialize the private method to a new WeakSet
+					if p.weakSetRef == ast.InvalidRef {
+						p.weakSetRef = p.newSymbol(ast.SymbolUnbound, "WeakSet")
+						p.moduleScope.Generated = append(p.moduleScope.Generated, p.weakSetRef)
+					}
+					privateMembers = append(privateMembers, ast.Assign(
+						ast.Expr{Loc: loc, Data: &ast.EIdentifier{Ref: ref}},
+						ast.Expr{Loc: loc, Data: &ast.ENew{Target: ast.Expr{Loc: loc, Data: &ast.EIdentifier{Ref: p.weakSetRef}}}},
+					))
+					p.recordUsage(ref)
+
+					// Determine where to store the private method
+					var target ast.Expr
+					if prop.IsStatic {
+						target = nameFunc()
+					} else {
+						target = ast.Expr{Loc: loc, Data: ast.EThisShared}
+					}
+
+					// Add every newly-constructed instance into this map
+					methodExpr := p.callRuntime(loc, "__privateAdd", []ast.Expr{
+						target,
+						{Loc: loc, Data: &ast.EIdentifier{Ref: ref}},
+					})
+					p.recordUsage(ref)
+
+					// Make sure that adding to the map happens before any field
+					// initializers to handle cases like this:
+					//
+					//   class A {
+					//     pub = this.#priv;
+					//     #priv() {}
+					//   }
+					//
+					if prop.IsStatic {
+						// Move this property to an assignment after the class ends
+						staticPrivateMethods = append(staticPrivateMethods, methodExpr)
+					} else {
+						// Move this property to an assignment inside the class constructor
+						instancePrivateMethods = append(instancePrivateMethods, ast.Stmt{Loc: loc, Data: &ast.SExpr{Value: methodExpr}})
+					}
+				}
+
+				// Move the method definition outside the class body
+				methodRef := p.generateTempRef(tempRefNeedsDeclare, "_")
+				if prop.Kind == ast.PropertySet {
+					p.symbols[methodRef.InnerIndex].Link = p.privateSetters[private.Ref]
+				} else {
+					p.symbols[methodRef.InnerIndex].Link = p.privateGetters[private.Ref]
+				}
+				p.recordUsage(methodRef)
+				privateMembers = append(privateMembers, ast.Assign(
+					ast.Expr{Loc: loc, Data: &ast.EIdentifier{Ref: methodRef}},
+					prop.ValueOrNil,
+				))
+				continue
+			} else if key, ok := prop.Key.Data.(*ast.EString); ok && helpers.UTF16EqualsString(key.Value, "constructor") {
+				if fn, ok := prop.ValueOrNil.Data.(*ast.EFunction); ok {
+					// Remember where the constructor is for later
+					ctor = fn
+
+					// Initialize TypeScript constructor parameter fields
+					if p.options.ts.Parse {
+						for _, arg := range ctor.Fn.Args {
+							if arg.IsTypeScriptCtorField {
+								if id, ok := arg.Binding.Data.(*ast.BIdentifier); ok {
+									parameterFields = append(parameterFields, ast.AssignStmt(
+										ast.Expr{Loc: arg.Binding.Loc, Data: p.dotOrMangledPropVisit(
+											ast.Expr{Loc: arg.Binding.Loc, Data: ast.EThisShared},
+											p.symbols[id.Ref.InnerIndex].OriginalName,
+											arg.Binding.Loc,
+										)},
+										ast.Expr{Loc: arg.Binding.Loc, Data: &ast.EIdentifier{Ref: id.Ref}},
+									))
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Keep this property
+		class.Properties[end] = prop
+		end++
+	}
+
+	// Finish the filtering operation
+	class.Properties = class.Properties[:end]
+
+	// Insert instance field initializers into the constructor
+	if len(parameterFields) > 0 || len(instancePrivateMethods) > 0 || len(instanceMembers) > 0 || (ctor != nil && result.superCtorRef != ast.InvalidRef) {
+		// Create a constructor if one doesn't already exist
+		if ctor == nil {
+			ctor = &ast.EFunction{Fn: ast.Fn{Body: ast.FnBody{Loc: classLoc}}}
+
+			// Append it to the list to reuse existing allocation space
+			class.Properties = append(class.Properties, ast.Property{
+				IsMethod:   true,
+				Key:        ast.Expr{Loc: classLoc, Data: &ast.EString{Value: helpers.StringToUTF16("constructor")}},
+				ValueOrNil: ast.Expr{Loc: classLoc, Data: ctor},
+			})
+
+			// Make sure the constructor has a super() call if needed
+			if class.ExtendsOrNil.Data != nil {
+				target := ast.Expr{Loc: classLoc, Data: ast.ESuperShared}
+				if classLoweringInfo.shimSuperCtorCalls {
+					p.recordUsage(result.superCtorRef)
+					target.Data = &ast.EIdentifier{Ref: result.superCtorRef}
+				}
+				argumentsRef := p.newSymbol(ast.SymbolUnbound, "arguments")
+				p.currentScope.Generated = append(p.currentScope.Generated, argumentsRef)
+				ctor.Fn.Body.Block.Stmts = append(ctor.Fn.Body.Block.Stmts, ast.Stmt{Loc: classLoc, Data: &ast.SExpr{Value: ast.Expr{Loc: classLoc, Data: &ast.ECall{
+					Target: target,
+					Args:   []ast.Expr{{Loc: classLoc, Data: &ast.ESpread{Value: ast.Expr{Loc: classLoc, Data: &ast.EIdentifier{Ref: argumentsRef}}}}},
+				}}}})
+			}
+		}
+
+		// Make sure the instance field initializers come after "super()" since
+		// they need "this" to ba available
+		generatedStmts := make([]ast.Stmt, 0, len(parameterFields)+len(instancePrivateMethods)+len(instanceMembers))
+		generatedStmts = append(generatedStmts, parameterFields...)
+		generatedStmts = append(generatedStmts, instancePrivateMethods...)
+		generatedStmts = append(generatedStmts, instanceMembers...)
+		p.insertStmtsAfterSuperCall(&ctor.Fn.Body, generatedStmts, result.superCtorRef)
+
+		// Sort the constructor first to match the TypeScript compiler's output
+		for i := 0; i < len(class.Properties); i++ {
+			if class.Properties[i].ValueOrNil.Data == ctor {
+				ctorProp := class.Properties[i]
+				for j := i; j > 0; j-- {
+					class.Properties[j] = class.Properties[j-1]
+				}
+				class.Properties[0] = ctorProp
+				break
+			}
+		}
+	}
+
+	// Pack the class back into an expression. We don't need to handle TypeScript
+	// decorators for class expressions because TypeScript doesn't support them.
+	if kind == classKindExpr {
+		// Calling "nameFunc" will replace "expr", so make sure to do that first
+		// before joining "expr" with any other expressions
+		var nameToJoin ast.Expr
+		if didCaptureClassExpr || computedPropertyCache.Data != nil ||
+			len(privateMembers) > 0 || len(staticPrivateMethods) > 0 || len(staticMembers) > 0 {
+			nameToJoin = nameFunc()
+		}
+
+		// Optionally preserve the name
+		if p.options.keepNames && nameToKeep != "" {
+			expr = p.keepExprSymbolName(expr, nameToKeep)
+		}
+
+		// Then join "expr" with any other expressions that apply
+		if computedPropertyCache.Data != nil {
+			expr = ast.JoinWithComma(expr, computedPropertyCache)
+		}
+		for _, value := range privateMembers {
+			expr = ast.JoinWithComma(expr, value)
+		}
+		for _, value := range staticPrivateMethods {
+			expr = ast.JoinWithComma(expr, value)
+		}
+		for _, value := range staticMembers {
+			expr = ast.JoinWithComma(expr, value)
+		}
+
+		// Finally join "expr" with the variable that holds the class object
+		if nameToJoin.Data != nil {
+			expr = ast.JoinWithComma(expr, nameToJoin)
+		}
+		if wrapFunc != nil {
+			expr = wrapFunc(expr)
+		}
+		return nil, expr
+	}
+
+	// If this is true, we have removed some code from the class body that could
+	// potentially contain an expression that captures the shadowing class name.
+	// This could lead to incorrect behavior if the class is later re-assigned,
+	// since the removed code would no longer be in the shadowing scope.
+	hasPotentialShadowCaptureEscape := result.shadowRef != ast.InvalidRef &&
+		(computedPropertyCache.Data != nil ||
+			len(privateMembers) > 0 ||
+			len(staticPrivateMethods) > 0 ||
+			len(staticMembers) > 0 ||
+			len(instanceDecorators) > 0 ||
+			len(staticDecorators) > 0 ||
+			len(class.TSDecorators) > 0)
+
+	// Optionally preserve the name
+	var keepNameStmt ast.Stmt
+	if p.options.keepNames && nameToKeep != "" {
+		name := nameFunc()
+		keepNameStmt = p.keepStmtSymbolName(name.Loc, name.Data.(*ast.EIdentifier).Ref, nameToKeep)
+	}
+
+	// Pack the class back into a statement, with potentially some extra
+	// statements afterwards
+	var stmts []ast.Stmt
+	var nameForClassDecorators ast.LocRef
+	generatedLocalStmt := false
+	if len(class.TSDecorators) > 0 || hasPotentialShadowCaptureEscape || classLoweringInfo.avoidTDZ {
+		generatedLocalStmt = true
+		name := nameFunc()
+		nameRef := name.Data.(*ast.EIdentifier).Ref
+		nameForClassDecorators = ast.LocRef{Loc: name.Loc, Ref: nameRef}
+		classExpr := ast.EClass{Class: *class}
+		class = &classExpr.Class
+		init := ast.Expr{Loc: classLoc, Data: &classExpr}
+
+		if hasPotentialShadowCaptureEscape && len(class.TSDecorators) == 0 {
+			// If something captures the shadowing name and escapes the class body,
+			// make a new constant to store the class and forward that value to a
+			// mutable alias. That way if the alias is mutated, everything bound to
+			// the original constant doesn't change.
+			//
+			//   class Foo {
+			//     static foo() { return this.#foo() }
+			//     static #foo() { return Foo }
+			//   }
+			//   Foo = class Bar {}
+			//
+			// becomes:
+			//
+			//   var _foo, foo_fn;
+			//   const Foo2 = class {
+			//     static foo() {
+			//       return __privateMethod(this, _foo, foo_fn).call(this);
+			//     }
+			//   };
+			//   let Foo = Foo2;
+			//   _foo = new WeakSet();
+			//   foo_fn = function() {
+			//     return Foo2;
+			//   };
+			//   _foo.add(Foo);
+			//   Foo = class Bar {
+			//   };
+			//
+			// Generate a new symbol instead of using the shadowing name directly
+			// because the shadowing name isn't a top-level symbol and we are now
+			// making a top-level symbol. This symbol must be minified along with
+			// other top-level symbols to avoid name collisions.
+			captureRef := p.newSymbol(ast.SymbolOther, p.symbols[result.shadowRef.InnerIndex].OriginalName)
+			p.currentScope.Generated = append(p.currentScope.Generated, captureRef)
+			p.recordDeclaredSymbol(captureRef)
+			p.mergeSymbols(result.shadowRef, captureRef)
+			stmts = append(stmts, ast.Stmt{Loc: classLoc, Data: &ast.SLocal{
+				Kind: p.selectLocalKind(ast.LocalConst),
+				Decls: []ast.Decl{{
+					Binding:    ast.Binding{Loc: name.Loc, Data: &ast.BIdentifier{Ref: captureRef}},
+					ValueOrNil: init,
+				}},
+			}})
+			init = ast.Expr{Loc: classLoc, Data: &ast.EIdentifier{Ref: captureRef}}
+			p.recordUsage(captureRef)
+		} else {
+			// If there are class decorators, then we actually need to mutate the
+			// immutable "const" binding that shadows everything in the class body.
+			// The official TypeScript compiler does this by rewriting all class name
+			// references in the class body to another temporary variable. This is
+			// basically what we're doing here.
+			if result.shadowRef != ast.InvalidRef {
+				p.mergeSymbols(result.shadowRef, nameRef)
+			}
+		}
+
+		// Generate the variable statement that will represent the class statement
+		stmts = append(stmts, ast.Stmt{Loc: classLoc, Data: &ast.SLocal{
+			Kind:     p.selectLocalKind(ast.LocalLet),
+			IsExport: kind == classKindExportStmt,
+			Decls: []ast.Decl{{
+				Binding:    ast.Binding{Loc: name.Loc, Data: &ast.BIdentifier{Ref: nameRef}},
+				ValueOrNil: init,
+			}},
+		}})
+		p.recordUsage(nameRef)
+	} else {
+		switch kind {
+		case classKindStmt:
+			stmts = append(stmts, ast.Stmt{Loc: classLoc, Data: &ast.SClass{Class: *class}})
+		case classKindExportStmt:
+			stmts = append(stmts, ast.Stmt{Loc: classLoc, Data: &ast.SClass{Class: *class, IsExport: true}})
+		case classKindExportDefaultStmt:
+			stmts = append(stmts, ast.Stmt{Loc: classLoc, Data: &ast.SExportDefault{
+				DefaultName: defaultName,
+				Value:       ast.Stmt{Loc: classLoc, Data: &ast.SClass{Class: *class}},
+			}})
+		}
+
+		// The shadowing name inside the class statement should be the same as
+		// the class statement name itself
+		if class.Name != nil && result.shadowRef != ast.InvalidRef {
+			p.mergeSymbols(result.shadowRef, class.Name.Ref)
+		}
+	}
+	if keepNameStmt.Data != nil {
+		stmts = append(stmts, keepNameStmt)
+	}
+
+	// The official TypeScript compiler adds generated code after the class body
+	// in this exact order. Matching this order is important for correctness.
+	if computedPropertyCache.Data != nil {
+		stmts = append(stmts, ast.Stmt{Loc: expr.Loc, Data: &ast.SExpr{Value: computedPropertyCache}})
+	}
+	for _, expr := range privateMembers {
+		stmts = append(stmts, ast.Stmt{Loc: expr.Loc, Data: &ast.SExpr{Value: expr}})
+	}
+	for _, expr := range staticPrivateMethods {
+		stmts = append(stmts, ast.Stmt{Loc: expr.Loc, Data: &ast.SExpr{Value: expr}})
+	}
+	for _, expr := range staticMembers {
+		stmts = append(stmts, ast.Stmt{Loc: expr.Loc, Data: &js_ast.SExpr{Value: expr}})
+	}
+	for _, expr := range instanceDecorators {
+		stmts = append(stmts, js_ast.Stmt{Loc: expr.Loc, Data: &js_ast.SExpr{Value: expr}})
+	}
+	for _, expr := range staticDecorators {
+		stmts = append(stmts, js_ast.Stmt{Loc: expr.Loc, Data: &js_ast.SExpr{Value: expr}})
+	}
+	if len(class.TSDecorators) > 0 {
+		stmts = append(stmts, js_ast.AssignStmt(
+			js_ast.Expr{Loc: nameForClassDecorators.Loc, Data: &js_ast.EIdentifier{Ref: nameForClassDecorators.Ref}},
+			p.callRuntime(classLoc, "__decorateClass", []js_ast.Expr{
+				{Loc: classLoc, Data: &js_ast.EArray{Items: class.TSDecorators}},
+				{Loc: nameForClassDecorators.Loc, Data: &js_ast.EIdentifier{Ref: nameForClassDecorators.Ref}},
+			}),
+		))
+		p.recordUsage(nameForClassDecorators.Ref)
+		p.recordUsage(nameForClassDecorators.Ref)
+	}
+	if generatedLocalStmt {
+		// "export default class x {}" => "class x {} export {x as default}"
+		if kind == classKindExportDefaultStmt {
+			stmts = append(stmts, js_ast.Stmt{Loc: classLoc, Data: &js_ast.SExportClause{
+				Items: []js_ast.ClauseItem{{Alias: "default", Name: defaultName}},
+			}})
+		}
+
+		// Calling "nameFunc" will set the class name, but we don't want it to have
+		// one. If the class name was necessary, we would have already split it off
+		// into a variable above. Reset it back to empty here now that we know we
+		// won't call "nameFunc" after this point.
+		class.Name = nil
+	}
+	return stmts, js_ast.Expr{}
+}
+
+func (p *parser) selectLocalKind(kind ast.LocalKind) ast.LocalKind {
+	// Optimization: use "let" instead of "const" because it's shorter. This is
+	// only done when bundling because assigning to "const" is only an error when
+	// bundling.
+	return ast.LocalLet
+}
+
+func (p *parser) markSyntaxFeature(feature compat.JSFeature, r location.Range) (didGenerateError bool) {
 	didGenerateError = true
 
 	var name string
-	where, _ := p.prettyPrintTargetEnvironment(feature)
+	where := feature
 
 	switch feature {
 	case compat.DefaultArgument:
@@ -139,13 +886,13 @@ type parser struct {
 	latestReturnHadSemicolon   bool
 	hasESModuleSyntax          bool
 	warnedThisIsUndefined      bool
-	// topLevelAwaitKeyword       location.Range
+	topLevelAwaitKeyword       location.Range
 	fnOrArrowDataParse         fnOrArrowDataParse
 	fnOrArrowDataVisit         fnOrArrowDataVisit
 	fnOnlyDataVisit            fnOnlyDataVisit
 	allocatedNames             []string
-	// latestArrowArgLoc          location.Loc
-	// forbidSuffixAfterAsLoc     location.Loc
+	latestArrowArgLoc          location.Loc
+	forbidSuffixAfterAsLoc     location.Loc
 	currentScope               *ast.Scope
 	scopesForCurrentPart       []*ast.Scope
 	symbols                    []ast.Symbol
@@ -223,9 +970,9 @@ type parser struct {
 	exportStarImportRecords     []uint32
 
 	// These are for handling ES6 imports and exports
-	// es6ImportKeyword        location.Range
-	// es6ExportKeyword        location.Range
-	// enclosingClassKeyword   location.Range
+	es6ImportKeyword        location.Range
+	es6ExportKeyword        location.Range
+	enclosingClassKeyword   location.Range
 	importItemsForNamespace map[ast.Ref]map[string]ast.LocRef
 	isImportItem            map[ast.Ref]bool
 	namedImports            map[ast.Ref]ast.NamedImport
@@ -354,7 +1101,7 @@ type parser struct {
 	//     AssignmentExpression
 	//     Expression , AssignmentExpression
 	//
-	// afterArrowBodyLoc location.Loc
+	afterArrowBodyLoc location.Loc
 
 	// We need to lower private names such as "#foo" if they are used in a brand
 	// check such as "#foo in x" even if the private name syntax would otherwise
@@ -2117,7 +2864,6 @@ func (p *parser) parseProperty(kind ast.PropertyKind, errors *deferredErrors) (a
 
 				case "async":
 					if raw == name && !p.lexer.HasNewlineBefore {
-						p.markLoweredSyntaxFeature(compat.AsyncAwait, nameRange, compat.Generator)
 						return p.parseProperty(kind, nil)
 					}
 
@@ -2600,7 +3346,6 @@ func (p *parser) parseAsyncPrefixExpr(asyncRange location.Range, level ast.L, fl
 				}
 
 				if isArrowFn {
-					p.markLoweredSyntaxFeature(compat.AsyncAwait, asyncRange, compat.Generator)
 					ref := p.storeNameInRef(p.lexer.Identifier)
 					arg := ast.Arg{Binding: ast.Binding{Loc: p.lexer.Loc(), Data: &ast.BIdentifier{Ref: ref}}}
 					p.lexer.Next()
@@ -2644,9 +3389,7 @@ func (p *parser) parseFnExpr(loc location.Loc, isAsync bool, asyncRange location
 	if isGenerator {
 		p.markSyntaxFeature(compat.Generator, p.lexer.Range())
 		p.lexer.Next()
-	} else if isAsync {
-		p.markLoweredSyntaxFeature(compat.AsyncAwait, asyncRange, compat.Generator)
-	}
+	} else if isAsync {}
 	var name *ast.LocRef
 
 	p.pushScopeForParsePass(ast.ScopeFunctionArgs, loc)
@@ -2787,8 +3530,6 @@ func (p *parser) parseParenExpr(loc location.Loc, level ast.L, opts parenExprOpt
 
 		var invalidLog invalidLog
 		args := []ast.Arg{}
-
-		p.markLoweredSyntaxFeature(compat.AsyncAwait, opts.asyncRange, compat.Generator)
 
 		// First, try converting the expressions to bindings
 		for _, item := range items {
@@ -3687,7 +4428,7 @@ func (p *parser) parseExprWithFlags(level ast.L, flags exprFlag) ast.Expr {
 }
 
 func (p *parser) parseExprCommon(level ast.L, errors *deferredErrors, flags exprFlag) ast.Expr {
-	hadPureCommentBefore := p.lexer.HasPureCommentBefore && !p.options.ignoreDCEAnnotations
+	hadPureCommentBefore := p.lexer.HasPureCommentBefore
 	expr := p.parsePrefix(level, errors, flags)
 
 	// There is no formal spec for "__PURE__" comments but from reverse-
@@ -4318,20 +5059,20 @@ func (p *parser) parseSuffix(left ast.Expr, level ast.L, errors *deferredErrors,
 				return left
 			}
 
-			// Warn about "!a in b" instead of "!(a in b)"
-			if !p.suppressWarningsAboutWeirdCode {
-				if e, ok := left.Data.(*ast.EUnary); ok && e.Op == ast.UnOpNot {
-					r := location.Range{Loc: left.Loc, Len: p.source.LocBeforeWhitespace(p.lexer.Loc()).Start - left.Loc.Start}
-					data := p.tracker.MsgData(r, "Suspicious use of the \"!\" operator inside the \"in\" operator")
-					data.Location.Suggestion = fmt.Sprintf("(%s)", p.source.TextForRange(r))
-					p.log.AddMsg(location.Msg{
-						Kind: location.Warning,
-						Data: data,
-						Notes: []location.MsgData{{Text: "The code \"!x in y\" is parsed as \"(!x) in y\". " +
-							"You need to insert parentheses to get \"!(x in y)\" instead."}},
-					})
-				}
-			}
+			// // Warn about "!a in b" instead of "!(a in b)"
+			// if !p.suppressWarningsAboutWeirdCode {
+			// 	if e, ok := left.Data.(*ast.EUnary); ok && e.Op == ast.UnOpNot {
+			// 		r := location.Range{Loc: left.Loc, Len: p.source.LocBeforeWhitespace(p.lexer.Loc()).Start - left.Loc.Start}
+			// 		data := p.tracker.MsgData(r, "Suspicious use of the \"!\" operator inside the \"in\" operator")
+			// 		data.Location.Suggestion = fmt.Sprintf("(%s)", p.source.TextForRange(r))
+			// 		p.log.AddMsg(location.Msg{
+			// 			Kind: location.Warning,
+			// 			Data: data,
+			// 			Notes: []location.MsgData{{Text: "The code \"!x in y\" is parsed as \"(!x) in y\". " +
+			// 				"You need to insert parentheses to get \"!(x in y)\" instead."}},
+			// 		})
+			// 	}
+			// }
 
 			p.lexer.Next()
 			left = ast.Expr{Loc: left.Loc, Data: &ast.EBinary{Op: ast.BinOpIn, Left: left, Right: p.parseExpr(ast.LCompare)}}
@@ -4509,7 +5250,7 @@ func (p *parser) parseJSXTag() (location.Range, string, ast.Expr) {
 
 func (p *parser) parseJSXElement(loc location.Loc) ast.Expr {
 	// Parse the tag
-	startRange, startText, startTagOrNil := p.parseJSXTag()
+	_, _, startTagOrNil := p.parseJSXTag()
 
 	// The tag may have TypeScript type arguments: "<Foo<T>/>"
 	// if p.options.ts.Parse {
@@ -5100,7 +5841,7 @@ func (p *parser) parseExportClause() ([]ast.ClauseItem, bool) {
 	// "export from" statement after all
 	if firstNonIdentifierLoc.Start != 0 && !p.lexer.IsContextualKeyword("from") {
 		//r := lexer.RangeOfIdentifier(p.source, firstNonIdentifierLoc)
-		fmt.Sprintf("Expected identifier but found %q", p.source.TextForRange(r))
+		fmt.Sprintf("Expected identifier but found %q")
 		panic(lexer.LexerPanic{})
 	}
 
@@ -5413,11 +6154,6 @@ func (p *parser) validateFunctionName(fn ast.Fn, kind fnKind) {
 }
 
 func (p *parser) validateDeclaredSymbolName(loc location.Loc, name string) {
-	if lexer.StrictModeReservedWords[name] {
-		p.markStrictModeFeature(reservedWord, lexer.RangeOfIdentifier(p.source, loc), name)
-	} else if isEvalOrArguments(name) {
-		p.markStrictModeFeature(evalOrArguments, lexer.RangeOfIdentifier(p.source, loc), name)
-	}
 }
 
 func (p *parser) parseClassStmt(loc location.Loc, opts parseStmtOpts) ast.Stmt {
@@ -5545,7 +6281,7 @@ func (p *parser) parseClass(classKeyword location.Range, name *ast.LocRef, class
 		// }
 
 		// This property may turn out to be a type in TypeScript, which should be ignored
-		if property, ok := p.parseProperty(ast.PropertyNormal, opts, nil); ok {
+		if property, ok := p.parseProperty(ast.PropertyNormal, nil); ok {
 			properties = append(properties, property)
 
 			// Forbid decorators on class constructors
@@ -5668,7 +6404,6 @@ func (p *parser) parseFnStmt(loc location.Loc, opts parseStmtOpts, isAsync bool,
 		p.markSyntaxFeature(compat.Generator, p.lexer.Range())
 		p.lexer.Next()
 	} else if isAsync {
-		p.markLoweredSyntaxFeature(compat.AsyncAwait, asyncRange, compat.Generator)
 	}
 
 	switch opts.lexicalDecl {
@@ -5882,15 +6617,11 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 				return p.parseFnStmt(loc, opts, true /* isAsync */, asyncRange)
 			}
 
-			if p.options.ts.Parse {
 				switch p.lexer.Identifier {
 				case "type":
 					// "export type foo = ..."
-					typeRange := p.lexer.Range()
 					p.lexer.Next()
 					if p.lexer.HasNewlineBefore {
-						p.log.Add(location.Error, &p.tracker, location.Range{Loc: location.Loc{Start: typeRange.End()}},
-							"Unexpected newline after \"type\"")
 						panic(lexer.LexerPanic{})
 					}
 					p.skipTypeScriptTypeStmt(parseStmtOpts{isModuleScope: opts.isModuleScope, isExport: true})
@@ -5911,7 +6642,6 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 					opts.isTypeScriptDeclare = true
 					return p.parseStmt(opts)
 				}
-			}
 
 			p.lexer.Unexpected()
 			return ast.Stmt{}
@@ -6755,7 +7485,6 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 
 	default:
 		isIdentifier := p.lexer.Token == lexer.TIdentifier
-		name := p.lexer.Identifier
 
 		// Parse either an async function, an async expression, or a normal expression
 		var expr ast.Expr
@@ -6932,7 +7661,7 @@ func (p *parser) addImportRecord(kind ast.ImportKind, loc location.Loc, text str
 	p.importRecords = append(p.importRecords, ast.ImportRecord{
 		Kind:       kind,
 		Range:      p.source.RangeOfString(loc),
-		Path:       location.Path{Text: text},
+		//Path:       location.Path{Text: text},
 		Assertions: assertions,
 	})
 	return index
@@ -6960,7 +7689,7 @@ func (p *parser) parseFnBody(data fnOrArrowDataParse) ast.FnBody {
 }
 
 func (p *parser) forbidLexicalDecl(loc location.Loc) {
-	r := lexer.RangeOfIdentifier(p.source, loc)
+	//r := lexer.RangeOfIdentifier(p.source, loc)
 	fmt.Print("Cannot use a declaration in a single-statement context")
 }
 
@@ -7108,7 +7837,7 @@ func (p *parser) pushScopeForVisitPass(kind ast.ScopeKind, loc location.Loc) {
 	if order.loc != loc || order.scope.Kind != kind {
 		panic(fmt.Sprintf("Expected scope (%d, %d) in %s, found scope (%d, %d)",
 			kind, loc.Start,
-			p.source.PrettyPath,
+			nil,
 			order.scope.Kind, order.loc.Start))
 	}
 
@@ -8291,9 +9020,6 @@ func (p *parser) visitSingleStmt(stmt ast.Stmt, kind stmtsKind) ast.Stmt {
 	hasIfScope := ok && fn.Fn.HasIfScope
 	if hasIfScope {
 		p.pushScopeForVisitPass(ast.ScopeBlock, stmt.Loc)
-		if p.isStrictMode() {
-			p.markStrictModeFeature(ifElseFunctionStmt, lexer.RangeOfIdentifier(p.source, stmt.Loc), "")
-		}
 	}
 
 	stmts := p.visitStmts([]ast.Stmt{stmt}, kind)
@@ -8338,7 +9064,7 @@ func (p *parser) visitForLoopInit(stmt ast.Stmt, isInOrOf bool) ast.Stmt {
 				d.ValueOrNil = p.visitExpr(d.ValueOrNil)
 			}
 		}
-		s.Decls = p.lowerObjectRestInDecls(s.Decls)
+		// s.Decls = p.lowerObjectRestInDecls(s.Decls)
 		s.Kind = p.selectLocalKind(s.Kind)
 
 	default:
@@ -8861,9 +9587,6 @@ func (p *parser) visitAndAppendStmt(stmts []ast.Stmt, stmt ast.Stmt) []ast.Stmt 
 		return stmts
 
 	case *ast.SDirective:
-		if p.isStrictMode() && s.LegacyOctalLoc.Start > 0 {
-			p.markStrictModeFeature(legacyOctalEscape, p.source.RangeOfLegacyOctalEscape(s.LegacyOctalLoc), "")
-		}
 
 	case *ast.SImport:
 		p.recordDeclaredSymbol(s.NamespaceRef)
@@ -8977,7 +9700,7 @@ func (p *parser) visitAndAppendStmt(stmts []ast.Stmt, stmt ast.Stmt) []ast.Stmt 
 
 		case *ast.SFunction:
 			// If we need to preserve the name but there is no name, generate a name
-			var name string
+			// var name string
 			// if p.options.keepNames {
 			// 	if s2.Fn.Name == nil {
 			// 		clone := s.DefaultName
@@ -12210,7 +12933,7 @@ func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 		return ast.Expr{Loc: expr.Loc, Data: e}, out
 
 	case *ast.EIf:
-		isCallTarget := e == p.callTarget
+		// isCallTarget := e == p.callTarget
 		e.Test = p.visitExpr(e.Test)
 
 		// if p.options.mangleSyntax {
@@ -12218,7 +12941,7 @@ func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 		// }
 
 		// Fold constants
-		if boolean, sideEffects, ok := toBooleanWithSideEffects(e.Test.Data); !ok {
+		if boolean, _, ok := toBooleanWithSideEffects(e.Test.Data); !ok {
 			e.Yes = p.visitExpr(e.Yes)
 			e.No = p.visitExpr(e.No)
 		} else {
@@ -12297,13 +13020,13 @@ func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 			}
 			p.markSyntaxFeature(compat.Destructuring, location.Range{Loc: expr.Loc, Len: 1})
 		}
-		hasSpread := false
+		// hasSpread := false
 		for i, item := range e.Items {
 			switch e2 := item.Data.(type) {
 			case *ast.EMissing:
 			case *ast.ESpread:
 				e2.Value, _ = p.visitExprInOut(e2.Value, exprIn{assignTarget: in.assignTarget})
-				hasSpread = true
+				// hasSpread = true
 			case *ast.EBinary:
 				if in.assignTarget != ast.AssignTargetNone && e2.Op == ast.BinOpAssign {
 					wasAnonymousNamedExpr := p.isAnonymousNamedExpr(e2.Right)
@@ -12336,7 +13059,7 @@ func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 			}
 			p.markSyntaxFeature(compat.Destructuring, location.Range{Loc: expr.Loc, Len: 1})
 		}
-		hasSpread := false
+		// hasSpread := false
 		protoRange := location.Range{}
 		for i := range e.Properties {
 			property := &e.Properties[i]
@@ -12354,7 +13077,7 @@ func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 								fmt.Print("Cannot specify the \"__proto__\" property more than once per object")
 
 						} else {
-							protoRange = r
+							// protoRange = r
 						}
 					}
 				}
@@ -12366,7 +13089,7 @@ func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 				// 	}
 				// }
 			} else {
-				hasSpread = true
+				// hasSpread = true
 			}
 
 			// Extract the initializer for expressions like "({ a: b = c } = d)"
@@ -12705,11 +13428,11 @@ func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 		e.Target = target
 		p.warnAboutImportNamespaceCall(e.Target, exprKindCall)
 
-		hasSpread := false
+		// hasSpread := false
 		for i, arg := range e.Args {
 			arg = p.visitExpr(arg)
 			if _, ok := arg.Data.(*ast.ESpread); ok {
-				hasSpread = true
+				// hasSpread = true
 			}
 			e.Args[i] = arg
 		}
@@ -13001,7 +13724,7 @@ func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 
 	case *ast.EFunction:
 		p.visitFn(&e.Fn, expr.Loc)
-		name := e.Fn.Name
+		//name := e.Fn.Name
 
 		// Remove unused function names when minifying
 		// if p.options.mangleSyntax && !p.currentScope.ContainsDirectEval &&
@@ -14467,9 +15190,9 @@ func newParser(source location.Source, lexer lexer.Lexer) *parser {
 		// suppressWarningsAboutWeirdCode: helpers.IsInsideNodeModules(source.KeyPath.Text),
 	}
 
-	p.findSymbolHelper = func(loc location.Loc, name string) ast.Ref {
-		return p.findSymbol(loc, name).ref
-	}
+	// p.findSymbolHelper = func(loc location.Loc, name string) ast.Ref {
+	// 	return p.findSymbol(loc, name).ref
+	// }
 
 	p.symbolForDefineHelper = func(index int) ast.Ref {
 		ref := p.injectedDefineSymbols[index]
@@ -14718,8 +15441,8 @@ func (p *parser) prepareForVisitPass() {
 
 	// Legacy HTML comments are not allowed in ESM files
 	if p.hasESModuleSyntax && p.lexer.LegacyHTMLCommentRange.Len > 0 {
-		p.log.AddWithNotes(location.Error, &p.tracker, p.lexer.LegacyHTMLCommentRange,
-			"Legacy HTML single-line comments are not allowed in ECMAScript modules", p.whyESModule())
+		// p.log.AddWithNotes(location.Error, &p.tracker, p.lexer.LegacyHTMLCommentRange,
+		// 	"Legacy HTML single-line comments are not allowed in ECMAScript modules", p.whyESModule())
 	}
 
 	// ECMAScript modules are always interpreted as strict mode. This has to be
@@ -14734,11 +15457,11 @@ func (p *parser) prepareForVisitPass() {
 
 	p.hoistSymbols(p.moduleScope)
 
-	if p.options.mode != config.ModePassThrough {
+	// if p.options.mode != config.ModePassThrough {
 		p.requireRef = p.declareCommonJSSymbol(ast.SymbolUnbound, "require")
-	} else {
-		p.requireRef = p.newSymbol(ast.SymbolUnbound, "require")
-	}
+	// } else {
+	// 	p.requireRef = p.newSymbol(ast.SymbolUnbound, "require")
+	// }
 
 	// CommonJS-style exports are only enabled if this isn't using ECMAScript-
 	// style exports. You can still use "require" in ESM, just not "module" or
@@ -14833,11 +15556,11 @@ func (p *parser) computeCharacterFrequency() *ast.CharFreq {
 	}
 
 	// Subtract out all import paths
-	for _, record := range p.importRecords {
-		if !record.SourceIndex.IsValid() {
-			charFreq.Scan(record.Path.Text, -1)
-		}
-	}
+	// for _, record := range p.importRecords {
+	// 	if !record.SourceIndex.IsValid() {
+	// 		charFreq.Scan(record.Path.Text, -1)
+	// 	}
+	// }
 
 	// Subtract out all symbols that will be minified
 	var visit func(*ast.Scope)
@@ -14905,7 +15628,7 @@ func (p *parser) generateImportStmt(
 
 func (p *parser) toAST(parts []ast.Part, hashbang string, directive string) ast.AST {
 	// Insert an import statement for any runtime imports we generated
-	if len(p.runtimeImports) > 0 && !p.options.omitRuntimeForTests {
+	if len(p.runtimeImports) > 0 {
 		// Sort the imports for determinism
 		keys := make([]string, 0, len(p.runtimeImports))
 		for key := range p.runtimeImports {
